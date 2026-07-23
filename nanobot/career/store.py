@@ -7,7 +7,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-
 PROFILE_FIELDS = (
     "name",
     "phone",

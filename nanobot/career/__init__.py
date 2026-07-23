@@ -1,5 +1,8 @@
-"""Career assistant storage and helpers."""
+"""Deterministic Career application.
 
-from nanobot.career.store import CareerStore
+The legacy :class:`CareerStore` remains importable from ``nanobot.career.store``
+while the replacement architecture is delivered module by module. It is not
+re-exported here so new code cannot accidentally build on the legacy store.
+"""
 
-__all__ = ["CareerStore"]
+__all__: list[str] = []

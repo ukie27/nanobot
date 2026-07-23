@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
 from nanobot.career.resume_parser import parse_resume_input
-from nanobot.career.store import CareerStore, PROFILE_FIELDS
+from nanobot.career.store import PROFILE_FIELDS, CareerStore
 
 
 class ResumeService:

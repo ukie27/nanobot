@@ -17,10 +17,12 @@ build/
 *.pyzz
 .venv/
 venv/
+node_modules/
+.npm-cache/
+.tools/
 __pycache__/
 poetry.lock
 .pytest_cache/
 botpy.log
 nano.*.save
 .DS_Store
-uv.lock

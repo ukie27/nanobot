@@ -50,6 +50,12 @@ app = typer.Typer(
     no_args_is_help=True,
 )
 
+# Career is an independent product surface. Keeping it as a sub-command avoids
+# coupling the deterministic Career application to the interactive Agent CLI.
+from nanobot.career.cli import app as career_app  # noqa: E402
+
+app.add_typer(career_app, name="career")
+
 console = Console()
 EXIT_COMMANDS = {"exit", "quit", "/exit", "/quit", ":q"}
 
