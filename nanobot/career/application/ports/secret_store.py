@@ -1,0 +1,9 @@
+"""Secret storage contract; persistent configuration only keeps references."""
+
+from typing import Protocol
+
+
+class SecretStore(Protocol):
+    def set(self, reference: str, secret: str) -> None: ...
+    def get(self, reference: str) -> str: ...
+    def delete(self, reference: str) -> None: ...

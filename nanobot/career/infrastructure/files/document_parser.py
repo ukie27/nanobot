@@ -28,7 +28,9 @@ class DocumentParser:
     def __init__(self, *, max_bytes: int) -> None:
         self.max_bytes = max_bytes
 
-    def parse(self, *, file_name: str, content: bytes, media_type: str | None = None) -> ParsedDocument:
+    def parse(
+        self, *, file_name: str, content: bytes, media_type: str | None = None
+    ) -> ParsedDocument:
         safe_name = self._validate_file_name(file_name)
         if not content:
             raise CareerDomainError("The imported document is empty.", code="empty_document")
@@ -80,7 +82,9 @@ class DocumentParser:
         if not candidate or candidate in {".", ".."}:
             raise CareerDomainError("A valid file name is required.", code="invalid_file_name")
         if "/" in candidate or "\\" in candidate or Path(candidate).name != candidate:
-            raise CareerDomainError("File paths are not accepted as file names.", code="invalid_file_name")
+            raise CareerDomainError(
+                "File paths are not accepted as file names.", code="invalid_file_name"
+            )
         cleaned = re.sub(r"[\x00-\x1f<>:\"|?*]", "_", candidate).strip(" .")
         if not cleaned:
             raise CareerDomainError("A valid file name is required.", code="invalid_file_name")
@@ -122,7 +126,9 @@ class DocumentParser:
         except CareerDomainError:
             raise
         except Exception as exc:
-            raise CareerDomainError("The PDF could not be parsed.", code="document_parse_failed") from exc
+            raise CareerDomainError(
+                "The PDF could not be parsed.", code="document_parse_failed"
+            ) from exc
 
     @staticmethod
     def _parse_docx(content: bytes) -> str:
@@ -130,7 +136,9 @@ class DocumentParser:
             document = DocxDocument(BytesIO(content))
             return "\n".join(paragraph.text for paragraph in document.paragraphs)
         except Exception as exc:
-            raise CareerDomainError("The DOCX could not be parsed.", code="document_parse_failed") from exc
+            raise CareerDomainError(
+                "The DOCX could not be parsed.", code="document_parse_failed"
+            ) from exc
 
     @staticmethod
     def _normalize(text: str) -> str:

@@ -35,6 +35,39 @@ class SystemStatusResponse(BaseModel):
     paths: SystemPathsResponse
 
 
+class ConnectorConfigUpdate(BaseModel):
+    enabled: bool = False
+    profile_alias: str = Field(min_length=1, max_length=120)
+    search_query: str = Field(default="", max_length=200)
+    city: str = Field(default="全国", min_length=1, max_length=100)
+    result_limit: int = Field(default=15, ge=1, le=50)
+    schedule_enabled: bool = False
+    schedule_times: list[str] = Field(
+        default_factory=lambda: ["09:00", "18:00"], min_length=1, max_length=8
+    )
+    timezone: str = Field(default="Asia/Shanghai", min_length=1, max_length=64)
+
+
+class ConnectorLoginRequest(BaseModel):
+    timeout: int = Field(default=300, ge=30, le=600)
+
+
+class ImapAccountUpdate(BaseModel):
+    enabled: bool = False
+    email_address: str = Field(min_length=3, max_length=320)
+    host: str = Field(min_length=1, max_length=255)
+    port: int = Field(default=993, ge=1, le=65535)
+    username: str = Field(min_length=1, max_length=320)
+    password: str | None = Field(default=None, min_length=1, max_length=1000)
+    folder: str = Field(default="INBOX", min_length=1, max_length=255)
+    initial_lookback_days: int = Field(default=30, ge=1, le=30)
+    poll_interval_minutes: int = Field(default=10, ge=5, le=1440)
+
+
+class MailProposalRequest(BaseModel):
+    application_id: str = Field(min_length=1, max_length=36)
+
+
 class BackgroundJobResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

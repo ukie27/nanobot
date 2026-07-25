@@ -1,9 +1,17 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { NavLink, Navigate, Route, Routes } from "react-router-dom";
 
-import { ApiError, getBackgroundJobs, getSystemStatus } from "./api";
+import { ApiError, cancelBackgroundJob, getBackgroundJobs, getSystemStatus, retryBackgroundJob } from "./api";
+import { ApplicationDetailPage, ApplicationReviewPage, ApplicationsPage } from "./ApplicationPages";
 import { JobDetailPage, JobPoolPage } from "./JobPages";
+import { InterviewCenterPage, InterviewDetailPage } from "./InterviewPages";
+import { MaterialDetailPage, MaterialsPage } from "./MaterialPages";
+import { MessageCenterPage } from "./MailPages";
 import { DocumentsPage, ProfilePage, ReviewPage } from "./ProfilePages";
+import { DashboardPage, TasksPage } from "./TaskPages";
+import { formatChinaTime } from "./time";
+import { DataSourcesPage } from "./ConnectorPages";
+import { WorkspacePage } from "./WorkspacePage";
 
 function Brand() {
   return (
@@ -23,27 +31,48 @@ function Layout() {
       <aside className="sidebar">
         <Brand />
         <nav aria-label="主导航">
+          <NavLink to="/dashboard">今日概览</NavLink>
+          <NavLink to="/workspace">全链路工作区</NavLink>
           <NavLink to="/profile">职业档案</NavLink>
           <NavLink to="/documents">简历导入</NavLink>
           <NavLink to="/review">事实审查</NavLink>
           <NavLink to="/job-posts">岗位池</NavLink>
+          <NavLink to="/materials">申请材料</NavLink>
+          <NavLink to="/applications">申请看板</NavLink>
+          <NavLink to="/application-review">事件审查</NavLink>
+          <NavLink to="/tasks">任务日程</NavLink>
+          <NavLink to="/data-sources">数据来源</NavLink>
+          <NavLink to="/message-center">消息中心</NavLink>
+          <NavLink to="/interviews">面试中心</NavLink>
           <NavLink to="/status">运行状态</NavLink>
           <NavLink to="/jobs">后台任务</NavLink>
         </nav>
         <div className="phase-note">
           <span>当前阶段</span>
-          <strong>Part 2 · 岗位匹配</strong>
-          <p>手动导入岗位，使用已确认事实生成可解释匹配。</p>
+          <strong>Part 9 · 集成与治理</strong>
+          <p>全链路搜索、统一审查、备份恢复和个人数据治理。</p>
         </div>
       </aside>
       <main className="content">
         <Routes>
-          <Route path="/" element={<Navigate to="/profile" replace />} />
+          <Route path="/" element={<Navigate to="/dashboard" replace />} />
+          <Route path="/dashboard" element={<DashboardPage />} />
+          <Route path="/workspace" element={<WorkspacePage />} />
           <Route path="/profile" element={<ProfilePage />} />
           <Route path="/documents" element={<DocumentsPage />} />
           <Route path="/review" element={<ReviewPage />} />
           <Route path="/job-posts" element={<JobPoolPage />} />
           <Route path="/job-posts/:id" element={<JobDetailPage />} />
+          <Route path="/materials" element={<MaterialsPage />} />
+          <Route path="/materials/:id" element={<MaterialDetailPage />} />
+          <Route path="/applications" element={<ApplicationsPage />} />
+          <Route path="/applications/:id" element={<ApplicationDetailPage />} />
+          <Route path="/application-review" element={<ApplicationReviewPage />} />
+          <Route path="/tasks" element={<TasksPage />} />
+          <Route path="/data-sources" element={<DataSourcesPage />} />
+          <Route path="/message-center" element={<MessageCenterPage />} />
+          <Route path="/interviews" element={<InterviewCenterPage />} />
+          <Route path="/interviews/:id" element={<InterviewDetailPage />} />
           <Route path="/status" element={<StatusPage />} />
           <Route path="/jobs" element={<JobsPage />} />
           <Route path="*" element={<Navigate to="/status" replace />} />
@@ -104,7 +133,10 @@ function StatusPage() {
 }
 
 function JobsPage() {
+  const client = useQueryClient();
   const query = useQuery({ queryKey: ["background-jobs"], queryFn: getBackgroundJobs });
+  const retry = useMutation({ mutationFn: retryBackgroundJob, onSuccess: async () => { await client.invalidateQueries({ queryKey: ["background-jobs"] }); } });
+  const cancel = useMutation({ mutationFn: cancelBackgroundJob, onSuccess: async () => { await client.invalidateQueries({ queryKey: ["background-jobs"] }); } });
   return (
     <>
       <header className="page-header">
@@ -120,7 +152,7 @@ function JobsPage() {
       )}
       {query.data && query.data.total > 0 && (
         <section className="panel table-wrap"><table><thead><tr><th>类型</th><th>状态</th><th>尝试次数</th><th>创建时间</th></tr></thead>
-          <tbody>{query.data.items.map((job) => <tr key={job.id}><td>{job.job_type}</td><td>{job.status}</td><td>{job.attempt_count}/{job.max_attempts}</td><td>{new Date(job.created_at).toLocaleString("zh-CN")}</td></tr>)}</tbody>
+          <tbody>{query.data.items.map((job) => <tr key={job.id}><td>{job.job_type}</td><td>{job.status}</td><td>{job.attempt_count}/{job.max_attempts}</td><td>{formatChinaTime(job.created_at)}（北京时间）</td><td>{["failed", "cancelled"].includes(job.status) && <button onClick={() => retry.mutate(job.id)}>重试</button>}{["pending", "running"].includes(job.status) && <button className="danger" onClick={() => cancel.mutate(job.id)}>取消</button>}</td></tr>)}</tbody>
         </table></section>
       )}
     </>

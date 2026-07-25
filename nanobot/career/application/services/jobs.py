@@ -42,6 +42,18 @@ class JobApplicationService:
             source_type="url" if source_url else "paste",
         )
 
+    def import_connector(
+        self, *, name: str, text: str, source_url: str, source_type: str
+    ) -> dict[str, Any]:
+        """Import validated content from a deterministic external connector."""
+        parsed = self.parser.parse_pasted_text(name=name, text=text)
+        return self._save(
+            name=name,
+            text=parsed.text,
+            source_url=source_url,
+            source_type=source_type,
+        )
+
     def import_file(
         self, *, file_name: str, content: bytes, media_type: str | None
     ) -> dict[str, Any]:

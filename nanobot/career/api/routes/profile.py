@@ -25,7 +25,9 @@ router = APIRouter(prefix="/api/v1", tags=["profile"])
 
 @router.get("/profile", response_model=CandidateProfileResponse)
 def get_profile(request: Request) -> CandidateProfileResponse:
-    return CandidateProfileResponse.model_validate(request.app.state.profile_service.gateway.get_profile())
+    return CandidateProfileResponse.model_validate(
+        request.app.state.profile_service.gateway.get_profile()
+    )
 
 
 @router.get("/documents", response_model=DocumentListResponse)
@@ -82,9 +84,7 @@ def add_manual_fact(request: Request, body: ManualFactRequest) -> CandidateFactR
 
 
 @router.post("/facts/{fact_id}/confirm", response_model=CandidateFactResponse)
-def confirm_fact(
-    fact_id: str, request: Request, body: FactActionRequest
-) -> CandidateFactResponse:
+def confirm_fact(fact_id: str, request: Request, body: FactActionRequest) -> CandidateFactResponse:
     result = request.app.state.profile_service.gateway.change_fact(
         fact_id=fact_id,
         expected_version=body.expected_version,

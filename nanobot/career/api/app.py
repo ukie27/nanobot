@@ -2,32 +2,73 @@
 
 from __future__ import annotations
 
+import asyncio
+import secrets
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
+from typing import Any
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from nanobot import __version__
 from nanobot.career.api.errors import install_exception_handlers
 from nanobot.career.api.middleware.correlation import CorrelationIdMiddleware
-from nanobot.career.api.routes import job_pool, jobs, profile, system
-from nanobot.career.application.services import JobApplicationService, ProfileApplicationService
+from nanobot.career.api.middleware.security import LocalBrowserSecurityMiddleware
+from nanobot.career.api.routes import (
+    applications,
+    connectors,
+    governance,
+    interviews,
+    job_pool,
+    jobs,
+    mail,
+    materials,
+    profile,
+    system,
+    tasks,
+)
+from nanobot.career.application.services import (
+    CareerApplicationService,
+    ConnectorApplicationService,
+    GovernanceApplicationService,
+    InterviewApplicationService,
+    JobApplicationService,
+    MailApplicationService,
+    MaterialApplicationService,
+    ProfileApplicationService,
+    TaskApplicationService,
+)
+from nanobot.career.infrastructure.connectors import OpenCliProcessRunner
 from nanobot.career.infrastructure.database import Database
+from nanobot.career.infrastructure.database.application_gateway import (
+    SqlAlchemyApplicationGateway,
+)
 from nanobot.career.infrastructure.database.backup import backup_database, database_revision
+from nanobot.career.infrastructure.database.connector_gateway import SqlAlchemyConnectorGateway
+from nanobot.career.infrastructure.database.governance_gateway import SqlAlchemyGovernanceGateway
+from nanobot.career.infrastructure.database.interview_gateway import SqlAlchemyInterviewGateway
 from nanobot.career.infrastructure.database.job_gateway import SqlAlchemyJobGateway
+from nanobot.career.infrastructure.database.mail_gateway import SqlAlchemyMailGateway
+from nanobot.career.infrastructure.database.material_gateway import SqlAlchemyMaterialGateway
 from nanobot.career.infrastructure.database.migrations import head_revision, upgrade_to_head
 from nanobot.career.infrastructure.database.profile_gateway import SqlAlchemyProfileGateway
+from nanobot.career.infrastructure.database.task_gateway import SqlAlchemyTaskGateway
 from nanobot.career.infrastructure.extraction import LocalJobExtractor, LocalResumeFactExtractor
 from nanobot.career.infrastructure.files import DocumentParser, LocalBlobStore, SafeJobPageFetcher
 from nanobot.career.infrastructure.jobs import BackgroundJobService
+from nanobot.career.infrastructure.mail import StdlibReadOnlyImapClient
+from nanobot.career.infrastructure.materials import VerifiedPdfExporter
+from nanobot.career.infrastructure.secrets import KeyringSecretStore
 from nanobot.career.infrastructure.settings import CareerSettings
 
 
 def create_app(settings: CareerSettings | None = None) -> FastAPI:
     settings = settings or CareerSettings()
+    browser_session_token = secrets.token_urlsafe(32)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -52,6 +93,31 @@ def create_app(settings: CareerSettings | None = None) -> FastAPI:
             extractor=LocalJobExtractor(),
             parser=DocumentParser(max_bytes=settings.max_document_bytes),
         )
+        material_gateway = SqlAlchemyMaterialGateway(
+            database.session_factory,
+            exports_dir=settings.exports_dir,
+            pdf_exporter=VerifiedPdfExporter(),
+        )
+        application_gateway = SqlAlchemyApplicationGateway(database.session_factory)
+        task_gateway = SqlAlchemyTaskGateway(database.session_factory)
+        connector_gateway = SqlAlchemyConnectorGateway(database.session_factory)
+        connector_service = ConnectorApplicationService(
+            gateway=connector_gateway,
+            runner=OpenCliProcessRunner(settings.opencli_executable),
+            jobs=job_service,
+        )
+        connector_gateway.get_or_create_boss()
+        mail_gateway = SqlAlchemyMailGateway(database.session_factory)
+        mail_service = MailApplicationService(
+            gateway=mail_gateway,
+            client=StdlibReadOnlyImapClient(),
+            secrets=KeyringSecretStore(),
+            applications=application_gateway,
+        )
+        interview_gateway = SqlAlchemyInterviewGateway(database.session_factory)
+        governance_gateway = SqlAlchemyGovernanceGateway(
+            database.session_factory, settings=settings, secrets=KeyringSecretStore()
+        )
         app.state.settings = settings
         app.state.database = database
         app.state.jobs = jobs_service
@@ -59,10 +125,33 @@ def create_app(settings: CareerSettings | None = None) -> FastAPI:
         app.state.job_gateway = job_gateway
         app.state.job_service = job_service
         app.state.job_fetcher = SafeJobPageFetcher(max_bytes=settings.max_document_bytes)
+        app.state.material_gateway = material_gateway
+        app.state.material_service = MaterialApplicationService(material_gateway)
+        app.state.application_gateway = application_gateway
+        app.state.application_service = CareerApplicationService(application_gateway)
+        app.state.task_gateway = task_gateway
+        app.state.task_service = TaskApplicationService(task_gateway)
+        app.state.connector_gateway = connector_gateway
+        app.state.connector_service = connector_service
+        app.state.mail_gateway = mail_gateway
+        app.state.mail_service = mail_service
+        app.state.interview_gateway = interview_gateway
+        app.state.interview_service = InterviewApplicationService(interview_gateway)
+        app.state.governance_gateway = governance_gateway
+        app.state.governance_service = GovernanceApplicationService(governance_gateway)
         app.state.recovered_jobs = jobs_service.recover_expired_leases()
+        app.state.scheduler_startup = task_gateway.run_due()
+        scheduler_stop = asyncio.Event()
+        scheduler_task = asyncio.create_task(
+            _scheduler_loop(app.state.task_service, connector_service, mail_service, scheduler_stop)
+        )
         try:
             yield
         finally:
+            scheduler_stop.set()
+            scheduler_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await scheduler_task
             database.close()
 
     app = FastAPI(
@@ -72,19 +161,51 @@ def create_app(settings: CareerSettings | None = None) -> FastAPI:
         openapi_url="/api/openapi.json",
         lifespan=lifespan,
     )
+    app.state.browser_session_token = browser_session_token
+    app.add_middleware(
+        TrustedHostMiddleware,
+        allowed_hosts=["127.0.0.1", "localhost", "[::1]", "testserver"],
+    )
     app.add_middleware(CorrelationIdMiddleware)
+    app.add_middleware(
+        LocalBrowserSecurityMiddleware,
+        token=browser_session_token,
+        allowed_origins={
+            f"http://127.0.0.1:{settings.port}",
+            f"http://localhost:{settings.port}",
+            "http://127.0.0.1:5173",
+            "http://localhost:5173",
+        },
+    )
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["http://127.0.0.1:5173", "http://localhost:5173"],
         allow_credentials=False,
-        allow_methods=["GET", "POST"],
-        allow_headers=["Content-Type", "X-Correlation-ID"],
+        allow_methods=["GET", "POST", "PUT", "DELETE"],
+        allow_headers=["Content-Type", "X-Correlation-ID", "X-CSRF-Token"],
     )
     install_exception_handlers(app)
     app.include_router(system.router)
     app.include_router(jobs.router)
     app.include_router(profile.router)
     app.include_router(job_pool.router)
+    app.include_router(materials.router)
+    app.include_router(materials.resume_router)
+    app.include_router(materials.export_router)
+    app.include_router(applications.router)
+    app.include_router(applications.proposal_router)
+    app.include_router(applications.review_router)
+    app.include_router(tasks.router)
+    app.include_router(tasks.dashboard_router)
+    app.include_router(tasks.notification_router)
+    app.include_router(tasks.scheduler_router)
+    app.include_router(tasks.event_router)
+    app.include_router(connectors.router)
+    app.include_router(interviews.router)
+    app.include_router(interviews.feedback_router)
+    app.include_router(interviews.improvement_router)
+    app.include_router(governance.router)
+    app.include_router(mail.router)
 
     if settings.web_dist_dir.is_dir():
         assets_dir = settings.web_dist_dir / "assets"
@@ -121,3 +242,25 @@ def _create_fact_extractor(settings: CareerSettings):
     config = load_config()
     provider = _make_provider(config)
     return NanobotProfileFactExtractor(provider, model=config.agents.defaults.model)
+
+
+async def _scheduler_loop(
+    task_service: Any, connector_service: Any, mail_service: Any, stop: asyncio.Event
+) -> None:
+    """Run persisted schedules while the local application is alive."""
+    while not stop.is_set():
+        await asyncio.to_thread(task_service.run_due)
+        try:
+            await asyncio.to_thread(connector_service.run_due)
+        except Exception:
+            # Connector failures are persisted on SyncRun and must not stop reminders.
+            pass
+        try:
+            await asyncio.to_thread(mail_service.run_due)
+        except Exception:
+            # Mail failures are persisted and isolated from all other schedules.
+            pass
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=60)
+        except TimeoutError:
+            continue

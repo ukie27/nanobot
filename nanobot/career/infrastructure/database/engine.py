@@ -61,10 +61,7 @@ class Database:
     def pragmas(self) -> dict[str, str | int]:
         names = ("journal_mode", "foreign_keys", "busy_timeout", "synchronous")
         with self.engine.connect() as connection:
-            return {
-                name: connection.execute(text(f"PRAGMA {name}")).scalar_one()
-                for name in names
-            }
+            return {name: connection.execute(text(f"PRAGMA {name}")).scalar_one() for name in names}
 
     def close(self) -> None:
         self.engine.dispose()

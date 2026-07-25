@@ -204,7 +204,9 @@ class SqlAlchemyProfileGateway:
             documents = session.scalars(
                 select(DocumentModel).order_by(DocumentModel.created_at.desc())
             ).all()
-            return [self._document_view(session, document, duplicate=False) for document in documents]
+            return [
+                self._document_view(session, document, duplicate=False) for document in documents
+            ]
 
     def list_facts(self, *, status: str | None = None) -> list[dict[str, Any]]:
         with self._session_factory() as session:

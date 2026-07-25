@@ -1,0 +1,46 @@
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useState, type FormEvent } from "react";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
+
+import { editMaterial, finalizeMaterial, generateMaterial, getJobPosts, getMaterial, getMaterials, getResumeSeries, reviewMaterial, type Material, type MaterialType } from "./api";
+import { formatChinaTime } from "./time";
+
+const TYPE_LABELS: Record<MaterialType, string> = { resume: "定制简历", cover_letter: "求职信", introduction: "自我介绍" };
+const STATUS_LABELS: Record<string, string> = { draft: "需要修复", reviewed: "审查通过", final: "已确认 Final" };
+
+export function MaterialsPage() {
+  const [params] = useSearchParams(); const navigate = useNavigate(); const client = useQueryClient();
+  const [resumeId, setResumeId] = useState("");
+  const jobs = useQuery({ queryKey: ["job-posts"], queryFn: getJobPosts }); const materials = useQuery({ queryKey: ["materials"], queryFn: getMaterials });
+  const resumes = useQuery({ queryKey: ["resume-series"], queryFn: getResumeSeries });
+  const create = useMutation({ mutationFn: generateMaterial, onSuccess: async (item) => { await Promise.all([client.invalidateQueries({ queryKey: ["materials"] }), client.invalidateQueries({ queryKey: ["resume-series"] })]); navigate(`/materials/${item.id}`); } });
+  function submit(event: FormEvent<HTMLFormElement>) { event.preventDefault(); const data = new FormData(event.currentTarget); create.mutate({ job_post_id: String(data.get("job_post_id")), material_type: String(data.get("material_type")) as MaterialType, name: String(data.get("name") ?? ""), ...(resumeId ? { resume_id: resumeId } : {}) }); }
+  return <><header className="page-header"><div><p className="eyebrow">FACT-BOUND MATERIALS</p><h1>申请材料</h1></div><span className="health-pill ok">{materials.data?.total ?? 0} 份</span></header>
+    <section className="panel material-create"><div><p className="eyebrow">DRAFTER → REVIEWER</p><h2>为真实岗位生成材料</h2><p>默认本地生成，只重排已确认事实；生成后必须经过 Reviewer 和 Final 门禁。</p></div><form className="form-grid" onSubmit={submit}><label>岗位<select name="job_post_id" defaultValue={params.get("jobId") ?? ""} required><option value="" disabled>选择岗位</option>{jobs.data?.items.map((job) => <option value={job.id} key={job.id}>{job.company} · {job.title}</option>)}</select></label><label>材料类型<select name="material_type" defaultValue="resume"><option value="resume">定制简历</option><option value="cover_letter">求职信</option><option value="introduction">自我介绍</option></select></label><label>基础简历系列<select name="resume_id" value={resumeId} onChange={(event) => setResumeId(event.target.value)}><option value="">新建系列</option>{resumes.data?.items.map((resume) => <option value={resume.id} key={resume.id}>{resume.name}（{resume.material_count} 份材料）</option>)}</select></label><label>新系列名称<input name="name" defaultValue="我的基础简历" required={!resumeId} disabled={Boolean(resumeId)} /></label><button disabled={create.isPending || !jobs.data?.total}>{create.isPending ? "生成与审查中…" : "生成事实绑定草稿"}</button>{create.error && <p className="form-error">{create.error.message}</p>}</form></section>
+    {!materials.data?.total && <section className="empty-state"><div className="empty-icon">✦</div><h2>还没有申请材料</h2><p>先在岗位池导入并分析一个岗位，再从这里生成定制简历。</p></section>}
+    <section className="job-list material-list">{materials.data?.items.map((item) => <Link className="panel job-card" to={`/materials/${item.id}`} key={item.id}><div><span className="category-tag">{TYPE_LABELS[item.material_type]}</span><h2>{item.job_title}</h2><p>{item.company} · 内容 v{item.current_version_number} · 工作流 v{item.version}</p></div><span className={`health-pill ${item.status === "final" || item.status === "reviewed" ? "ok" : "blocked"}`}>{STATUS_LABELS[item.status]}</span></Link>)}</section></>;
+}
+
+export function MaterialDetailPage() {
+  const { id = "" } = useParams(); const client = useQueryClient();
+  const query = useQuery({ queryKey: ["material", id], queryFn: () => getMaterial(id), enabled: Boolean(id) });
+  const refresh = async () => { await client.invalidateQueries({ queryKey: ["material", id] }); await client.invalidateQueries({ queryKey: ["materials"] }); };
+  const review = useMutation({ mutationFn: () => reviewMaterial(id), onSuccess: refresh });
+  const finalize = useMutation({ mutationFn: (material: Material) => finalizeMaterial(material), onSuccess: refresh });
+  if (query.isLoading) return <section className="empty-state"><p>正在读取材料版本…</p></section>;
+  if (query.error || !query.data) return <section className="notice error">{query.error?.message ?? "材料不存在"}</section>;
+  const material = query.data;
+  return <><header className="page-header job-detail-header"><div><p className="eyebrow"><Link to="/materials">申请材料</Link> / {material.company}</p><h1>{material.current_version.title}</h1><p>{TYPE_LABELS[material.material_type]} · 内容 v{material.current_version.version_number}</p></div><span className={`health-pill ${material.status === "draft" ? "blocked" : "ok"}`}>{STATUS_LABELS[material.status]}</span></header>
+    <section className="metric-grid"><article><span>内容版本</span><strong>v{material.current_version.version_number}</strong><small>父版本 {material.current_version.parent_version_id ? "已记录" : "初始草稿"}</small></article><article><span>Reviewer</span><strong>{material.review?.error_count ?? 0} 错误</strong><small>{material.review?.warning_count ?? 0} 条风险提示</small></article><article><span>事实集合</span><strong>{material.current_version.fact_set_hash.slice(0, 10)}</strong><small>生成时锁定</small></article><article><span>导出</span><strong>{material.export ? `${material.export.page_count} 页` : "未生成"}</strong><small>{material.export?.text_layer_ok ? "ATS 文本层通过" : "Final 后生成"}</small></article></section>
+    {material.review?.findings.length ? <section className="panel findings"><div className="panel-heading"><h2>Reviewer 发现</h2><span>{material.review.findings.length} 项</span></div>{material.review.findings.map((item) => <div className={`finding ${item.severity}`} key={item.id}><strong>{item.severity === "error" ? "阻断" : "风险"} · {item.code}</strong><p>{item.message}</p></div>)}</section> : <section className="notice success">Reviewer 未发现阻断问题。所有材料表达均有事实快照支持。</section>}
+    <MaterialEditor material={material} onSaved={refresh} />
+    {material.status !== "final" && <section className="panel final-actions"><div><h2>Final 门禁</h2><p>确认后版本不可编辑，并生成经过文本层和真实渲染验证的 PDF。</p></div><div><button className="secondary" onClick={() => review.mutate()} disabled={review.isPending}>重新审查</button><button onClick={() => finalize.mutate(material)} disabled={finalize.isPending || Boolean(material.review?.error_count)}>确认 Final 并导出 PDF</button></div>{(review.error || finalize.error) && <p className="form-error">{review.error?.message ?? finalize.error?.message}</p>}</section>}
+    {material.export && <section className="panel export-result"><div><p className="eyebrow">VERIFIED PDF</p><h2>Final 导出已通过</h2><p>{(material.export.size_bytes / 1024).toFixed(1)} KB · {material.export.page_count} 页 · 文本层 {material.export.text_layer_ok ? "通过" : "失败"} · 渲染 {material.export.render_ok ? "通过" : "失败"}</p><code>{material.export.sha256}</code><p><a className="download-button" href={material.export.download_url}>下载 PDF</a></p></div><img src={material.export.preview_url} alt="Final PDF 第一页渲染预览" /></section>}
+    <section className="panel"><div className="panel-heading"><h2>不可变版本链</h2><span>{material.versions.length} 个版本</span></div>{material.versions.map((version) => <p className="history-row" key={version.id}>v{version.version_number} · {STATUS_LABELS[version.status] ?? version.status}<small>{formatChinaTime(version.created_at)}（北京时间） · {version.content_hash.slice(0, 12)}</small></p>)}</section></>;
+}
+
+function MaterialEditor({ material, onSaved }: { material: Material; onSaved: () => Promise<void> }) {
+  const [values, setValues] = useState(() => Object.fromEntries(material.current_version.blocks.map((block) => [block.id, block.text])));
+  const edit = useMutation({ mutationFn: () => editMaterial(material, material.current_version.blocks.map((block) => ({ id: block.id, text: values[block.id] ?? block.text }))), onSuccess: onSaved });
+  return <section className="panel material-editor"><div className="panel-heading"><div><p className="eyebrow">CLAIM → FACT SNAPSHOT</p><h2>{material.status === "final" ? "Final 内容" : "编辑事实表达"}</h2></div><span>{material.current_version.blocks.length} 条</span></div>{material.current_version.blocks.map((block) => <article className="material-block" key={block.id}><label>{block.section}<textarea rows={3} value={values[block.id] ?? block.text} readOnly={material.status === "final"} onChange={(event) => setValues((previous) => ({ ...previous, [block.id]: event.target.value }))} /></label><details open><summary>事实引用（{block.fact_snapshots.length}）</summary>{block.fact_snapshots.map((fact) => <blockquote key={fact.id}>{fact.value}<small>{fact.category} · {fact.field_key} · Fact v{fact.fact_version}</small></blockquote>)}</details></article>)}{material.status !== "final" && <button onClick={() => edit.mutate()} disabled={edit.isPending}>{edit.isPending ? "保存并审查中…" : "保存为新版本并重新审查"}</button>}{edit.error && <p className="form-error">{edit.error.message}</p>}</section>;
+}

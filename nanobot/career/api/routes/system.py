@@ -1,6 +1,6 @@
 """Health and operational status routes."""
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Response
 
 from nanobot import __version__
 from nanobot.career.api.schemas import (
@@ -12,6 +12,21 @@ from nanobot.career.api.schemas import (
 from nanobot.career.infrastructure.database.migrations import current_revision, head_revision
 
 router = APIRouter(tags=["system"])
+
+
+@router.get("/api/v1/system/session")
+def local_session(request: Request, response: Response) -> dict[str, str]:
+    token = request.app.state.browser_session_token
+    response.set_cookie(
+        "career_session",
+        token,
+        httponly=True,
+        samesite="strict",
+        secure=False,
+        max_age=8 * 60 * 60,
+        path="/",
+    )
+    return {"csrf_token": token}
 
 
 @router.get("/health/live", response_model=HealthResponse)

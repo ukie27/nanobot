@@ -81,14 +81,20 @@ class LocalResumeFactExtractor:
                     FactCategory.AWARD: "award",
                     FactCategory.CERTIFICATE: "certificate",
                 }[current_section]
-                values = self._split_values(line) if current_section is FactCategory.SKILL else [line]
+                values = (
+                    self._split_values(line) if current_section is FactCategory.SKILL else [line]
+                )
                 for item in values:
                     self._append(facts, seen, current_section, field_key, item, raw_line, 0.72)
 
         for match in self._EMAIL.finditer(text):
-            self._append(facts, seen, FactCategory.BASIC, "email", match.group(), match.group(), 0.98)
+            self._append(
+                facts, seen, FactCategory.BASIC, "email", match.group(), match.group(), 0.98
+            )
         for match in self._PHONE.finditer(text):
-            self._append(facts, seen, FactCategory.BASIC, "phone", match.group(), match.group(), 0.96)
+            self._append(
+                facts, seen, FactCategory.BASIC, "phone", match.group(), match.group(), 0.96
+            )
         return facts[:200]
 
     @staticmethod
@@ -111,4 +117,6 @@ class LocalResumeFactExtractor:
         if not normalized or key in seen:
             return
         seen.add(key)
-        facts.append(ExtractedFact(category, field_key, value.strip(), evidence.strip(), confidence))
+        facts.append(
+            ExtractedFact(category, field_key, value.strip(), evidence.strip(), confidence)
+        )

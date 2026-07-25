@@ -65,12 +65,29 @@ def install_exception_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(HTTPException)
     async def handle_http(request: Request, exc: HTTPException) -> JSONResponse:
+        if isinstance(exc.detail, dict):
+            code = str(exc.detail.get("code") or "http_error")
+            detail = str(
+                exc.detail.get("message")
+                or exc.detail.get("detail")
+                or "The HTTP request failed."
+            )
+            extensions = {
+                key: value
+                for key, value in exc.detail.items()
+                if key not in {"code", "message", "detail"}
+            }
+        else:
+            code = "http_error"
+            detail = str(exc.detail)
+            extensions = {}
         return problem_response(
             request,
             status=exc.status_code,
             title="HTTP request failed",
-            detail=str(exc.detail),
-            code="http_error",
+            detail=detail,
+            code=code,
+            extensions=extensions or None,
         )
 
     @app.exception_handler(Exception)

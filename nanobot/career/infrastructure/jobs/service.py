@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict, dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import uuid4
 
@@ -111,6 +111,101 @@ class BackgroundJobService:
             )
             session.commit()
             return int(result.rowcount or 0)
+
+    def claim_next(
+        self, worker_id: str, *, lease_seconds: int = 60, now: datetime | None = None
+    ) -> BackgroundJobView | None:
+        now = now or datetime.now(UTC)
+        with self._session_factory() as session:
+            row = session.scalar(
+                select(BackgroundJobModel)
+                .where(
+                    BackgroundJobModel.status == "pending",
+                    BackgroundJobModel.run_after <= now,
+                    BackgroundJobModel.attempt_count < BackgroundJobModel.max_attempts,
+                )
+                .order_by(BackgroundJobModel.priority.desc(), BackgroundJobModel.created_at)
+            )
+            if row is None:
+                return None
+            row.status = "running"
+            row.attempt_count += 1
+            row.started_at = row.started_at or now
+            row.lease_owner = worker_id
+            row.lease_expires_at = now + timedelta(seconds=max(10, lease_seconds))
+            session.commit()
+            return self._view(row)
+
+    def complete(self, job_id: str, worker_id: str, *, now: datetime | None = None) -> None:
+        now = now or datetime.now(UTC)
+        with self._session_factory() as session:
+            row = session.get(BackgroundJobModel, job_id)
+            self._expect_owned(row, worker_id)
+            row.status = "succeeded"
+            row.finished_at = now
+            row.lease_owner = None
+            row.lease_expires_at = None
+            session.commit()
+
+    def fail(
+        self,
+        job_id: str,
+        worker_id: str,
+        *,
+        error_code: str,
+        now: datetime | None = None,
+    ) -> None:
+        now = now or datetime.now(UTC)
+        with self._session_factory() as session:
+            row = session.get(BackgroundJobModel, job_id)
+            self._expect_owned(row, worker_id)
+            exhausted = row.attempt_count >= row.max_attempts
+            row.status = "failed" if exhausted else "pending"
+            row.run_after = now + timedelta(seconds=min(300, 2**row.attempt_count))
+            row.last_error_code = error_code[:120]
+            row.last_error_message_redacted = "Background job handler failed."
+            row.lease_owner = None
+            row.lease_expires_at = None
+            row.finished_at = now if exhausted else None
+            session.commit()
+
+    def cancel(self, job_id: str) -> BackgroundJobView:
+        with self._session_factory() as session:
+            row = session.get(BackgroundJobModel, job_id)
+            if row is None:
+                raise LookupError("Background job was not found.")
+            if row.status in {"succeeded", "failed", "cancelled"}:
+                return self._view(row)
+            row.status = "cancelled"
+            row.finished_at = datetime.now(UTC)
+            row.lease_owner = None
+            row.lease_expires_at = None
+            session.commit()
+            return self._view(row)
+
+    def retry(self, job_id: str) -> BackgroundJobView:
+        with self._session_factory() as session:
+            row = session.get(BackgroundJobModel, job_id)
+            if row is None:
+                raise LookupError("Background job was not found.")
+            if row.status not in {"failed", "cancelled"}:
+                raise ValueError("Only failed or cancelled jobs can be retried.")
+            row.status = "pending"
+            row.run_after = datetime.now(UTC)
+            row.attempt_count = 0
+            row.started_at = None
+            row.finished_at = None
+            row.last_error_code = None
+            row.last_error_message_redacted = None
+            session.commit()
+            return self._view(row)
+
+    @staticmethod
+    def _expect_owned(row: BackgroundJobModel | None, worker_id: str) -> None:
+        if row is None:
+            raise LookupError("Background job was not found.")
+        if row.status != "running" or row.lease_owner != worker_id:
+            raise RuntimeError("Background job lease is not owned by this worker.")
 
     @staticmethod
     def _view(row: BackgroundJobModel) -> BackgroundJobView:

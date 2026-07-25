@@ -64,7 +64,11 @@ def upgrade() -> None:
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
         sa.UniqueConstraint(
-            "profile_id", "category", "field_key", "normalized_value", name="uq_candidate_fact_dedup"
+            "profile_id",
+            "category",
+            "field_key",
+            "normalized_value",
+            name="uq_candidate_fact_dedup",
         ),
     )
     op.create_index(
@@ -81,9 +85,7 @@ def upgrade() -> None:
             sa.ForeignKey("candidate_facts.id", ondelete="CASCADE"),
             nullable=False,
         ),
-        sa.Column(
-            "document_id", sa.String(36), sa.ForeignKey("documents.id", ondelete="SET NULL")
-        ),
+        sa.Column("document_id", sa.String(36), sa.ForeignKey("documents.id", ondelete="SET NULL")),
         sa.Column("source_type", sa.String(32), nullable=False),
         sa.Column("evidence_text", sa.Text(), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
@@ -128,9 +130,7 @@ def upgrade() -> None:
         sa.Column("task_type", sa.String(100), nullable=False),
         sa.Column("implementation", sa.String(100), nullable=False),
         sa.Column("schema_version", sa.String(32), nullable=False),
-        sa.Column(
-            "document_id", sa.String(36), sa.ForeignKey("documents.id", ondelete="SET NULL")
-        ),
+        sa.Column("document_id", sa.String(36), sa.ForeignKey("documents.id", ondelete="SET NULL")),
         sa.Column("status", sa.String(24), nullable=False),
         sa.Column("output_count", sa.Integer(), nullable=False),
         sa.Column("error_code", sa.String(100)),

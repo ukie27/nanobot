@@ -30,6 +30,8 @@ def test_domain_does_not_depend_on_framework_or_infrastructure() -> None:
     violations: list[str] = []
     for path in domain.rglob("*.py"):
         for module in imported_modules(path):
-            if any(module == root or module.startswith(f"{root}.") for root in FORBIDDEN_DOMAIN_ROOTS):
+            if any(
+                module == root or module.startswith(f"{root}.") for root in FORBIDDEN_DOMAIN_ROOTS
+            ):
                 violations.append(f"{path}: {module}")
     assert violations == []

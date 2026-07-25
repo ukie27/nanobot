@@ -21,7 +21,9 @@ def redact(value: Any) -> str:
     return _EMAIL.sub(r"\1***\2", text)
 
 
-def configure_logging(logs_dir: Path, *, level: str = "INFO", verbose: bool = False) -> Path:
+def configure_logging(
+    logs_dir: Path, *, level: str = "INFO", verbose: bool = False, retention_days: int = 14
+) -> Path:
     logs_dir.mkdir(parents=True, exist_ok=True)
     log_path = logs_dir / "career.log"
     logger.remove()
@@ -31,7 +33,7 @@ def configure_logging(logs_dir: Path, *, level: str = "INFO", verbose: bool = Fa
         log_path,
         level=level,
         rotation="10 MB",
-        retention="14 days",
+        retention=f"{retention_days} days",
         enqueue=True,
         serialize=True,
         format="{time:YYYY-MM-DDTHH:mm:ss.SSSZ} | {level} | {extra} | {message}",

@@ -59,9 +59,9 @@ def test_import_review_edit_and_confirmed_query(tmp_path: Path) -> None:
 
         profile = client.get("/api/v1/profile").json()
         assert profile["display_name"] == "张三（英文名 San Zhang）"
-        confirmed_facts = client.get(
-            "/api/v1/facts", params={"status": "confirmed"}
-        ).json()["items"]
+        confirmed_facts = client.get("/api/v1/facts", params={"status": "confirmed"}).json()[
+            "items"
+        ]
         assert [item["id"] for item in confirmed_facts] == [name["id"]]
 
 
@@ -197,6 +197,6 @@ def test_automatic_upgrade_backs_up_part0_database(tmp_path: Path) -> None:
     assert database_revision(settings.database_path) == "20260723_0001"
     with TestClient(create_app(settings)) as client:
         assert client.get("/health/ready").status_code == 200
-    backups = list(settings.backups_dir.glob("career-*-pre-202607230003.sqlite3"))
+    backups = list(settings.backups_dir.glob("career-*-pre-202607240010.sqlite3"))
     assert len(backups) == 1
     assert database_revision(backups[0]) == "20260723_0001"

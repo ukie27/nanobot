@@ -25,12 +25,22 @@ class CareerSettings(BaseSettings):
     log_level: str = "INFO"
     auto_migrate: bool = True
     job_lease_seconds: int = Field(default=60, ge=10, le=3600)
+    log_retention_days: int = Field(default=14, ge=1, le=365)
+    agent_trace_retention_days: int = Field(default=30, ge=1, le=3650)
     max_document_bytes: int = Field(default=10 * 1024 * 1024, ge=1024, le=50 * 1024 * 1024)
     fact_extractor_mode: Literal["local", "agent"] = "local"
+    opencli_executable: Path | None = None
 
     @field_validator("data_dir", mode="before")
     @classmethod
     def _expand_data_dir(cls, value: object) -> Path:
+        return Path(str(value)).expanduser().resolve(strict=False)
+
+    @field_validator("opencli_executable", mode="before")
+    @classmethod
+    def _expand_opencli_executable(cls, value: object) -> Path | None:
+        if value in (None, ""):
+            return None
         return Path(str(value)).expanduser().resolve(strict=False)
 
     @property
@@ -58,6 +68,10 @@ class CareerSettings(BaseSettings):
         return self.data_dir / "blobs"
 
     @property
+    def exports_dir(self) -> Path:
+        return self.data_dir / "exports"
+
+    @property
     def instance_lock_path(self) -> Path:
         return self.runtime_dir / "career.lock"
 
@@ -73,5 +87,6 @@ class CareerSettings(BaseSettings):
             self.logs_dir,
             self.backups_dir,
             self.blobs_dir,
+            self.exports_dir,
         ):
             path.mkdir(parents=True, exist_ok=True)
