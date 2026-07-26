@@ -8,10 +8,9 @@ try:
 except ImportError:
     pytest.skip("Slack dependencies not installed (slack-sdk)", allow_module_level=True)
 
-from nanobot.bus.events import OutboundMessage
-from nanobot.bus.queue import MessageBus
-from nanobot.channels.slack import SlackChannel
-from nanobot.channels.slack import SlackConfig
+from career_console.runtime.bus.events import OutboundMessage
+from career_console.runtime.bus.queue import MessageBus
+from career_console.runtime.channels.slack import SlackChannel, SlackConfig
 
 
 class _FakeAsyncWebClient:
@@ -21,7 +20,7 @@ class _FakeAsyncWebClient:
         self.reactions_add_calls: list[dict[str, object | None]] = []
         self.reactions_remove_calls: list[dict[str, object | None]] = []
 
-    async def chat_postMessage(
+    async def chat_postMessage(  # noqa: N802 - mirrors Slack SDK method name
         self,
         *,
         channel: str,

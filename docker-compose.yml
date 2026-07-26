@@ -1,18 +1,20 @@
+name: career-console
+
 x-common-config: &common-config
   build:
     context: .
     dockerfile: Dockerfile
   volumes:
-    - ~/.nanobot:/root/.nanobot
+    - ./CareerConsole:/data/CareerConsole
 
 services:
-  nanobot-gateway:
-    container_name: nanobot-gateway
+  career-console:
+    container_name: career-console
     <<: *common-config
-    command: ["gateway"]
+    command: ["serve", "--workspace", "/data/CareerConsole", "--host", "0.0.0.0", "--port", "8765"]
     restart: unless-stopped
     ports:
-      - 18790:18790
+      - "127.0.0.1:8765:8765"
     deploy:
       resources:
         limits:
@@ -22,10 +24,10 @@ services:
           cpus: '0.25'
           memory: 256M
   
-  nanobot-cli:
+  career-console-cli:
     <<: *common-config
     profiles:
       - cli
-    command: ["status"]
+    command: ["status", "--workspace", "/data/CareerConsole"]
     stdin_open: true
     tty: true

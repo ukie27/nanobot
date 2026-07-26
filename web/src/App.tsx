@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { NavLink, Navigate, Route, Routes } from "react-router-dom";
 
-import { ApiError, cancelBackgroundJob, getBackgroundJobs, getSystemStatus, retryBackgroundJob } from "./api";
+import { ApiError, cancelBackgroundJob, getBackgroundJobs, getOnboardingStatus, getSystemStatus, retryBackgroundJob } from "./api";
 import { ApplicationDetailPage, ApplicationReviewPage, ApplicationsPage } from "./ApplicationPages";
 import { JobDetailPage, JobPoolPage } from "./JobPages";
 import { InterviewCenterPage, InterviewDetailPage } from "./InterviewPages";
@@ -14,47 +14,35 @@ import { formatChinaTime } from "./time";
 import { DataSourcesPage } from "./ConnectorPages";
 import { WorkspacePage } from "./WorkspacePage";
 import { AgentRunsPage, ReviewCenterPage } from "./RuntimePages";
+import { SettingsPage } from "./SettingsPage";
+import { OnboardingPage } from "./OnboardingPage";
 
 function Brand() {
   return (
     <div className="brand">
-      <div className="brand-mark" aria-hidden="true">N</div>
+      <div className="brand-mark" aria-hidden="true">C</div>
       <div>
-        <strong>Nanobot Career</strong>
+        <strong>CareerConsole</strong>
         <span>本地求职工作台</span>
       </div>
     </div>
   );
 }
 
-function Layout() {
+function ProductLayout() {
   return (
     <div className="app-shell">
       <aside className="sidebar">
         <Brand />
         <nav aria-label="主导航">
-          <NavLink to="/dashboard">今日概览</NavLink>
-          <NavLink to="/workspace">全链路工作区</NavLink>
-          <NavLink to="/profile">职业档案</NavLink>
-          <NavLink to="/documents">简历导入</NavLink>
-          <NavLink to="/reviews">审查中心</NavLink>
-          <NavLink to="/opportunities">招聘机会</NavLink>
-          <NavLink to="/job-posts">具体岗位</NavLink>
-          <NavLink to="/materials">申请材料</NavLink>
-          <NavLink to="/applications">申请看板</NavLink>
-          <NavLink to="/tasks">任务日程</NavLink>
-          <NavLink to="/data-sources">数据来源</NavLink>
-          <NavLink to="/message-center">消息中心</NavLink>
-          <NavLink to="/interviews">面试中心</NavLink>
-          <NavLink to="/agent-runs">Agent 运行</NavLink>
-          <NavLink to="/status">运行状态</NavLink>
-          <NavLink to="/jobs">后台任务</NavLink>
+          <span className="nav-label">开始</span><NavLink to="/dashboard">今日</NavLink>
+          <span className="nav-label">找岗位</span><NavLink to="/opportunities">招聘信息</NavLink><NavLink to="/job-posts">岗位库</NavLink>
+          <span className="nav-label">投递</span><NavLink to="/applications">申请看板</NavLink><NavLink to="/tasks">任务与日程</NavLink><NavLink to="/interviews">面试</NavLink>
+          <span className="nav-label">简历与档案</span><NavLink to="/profile">职业档案</NavLink><NavLink to="/documents">资料导入</NavLink><NavLink to="/materials">申请材料</NavLink>
+          <span className="nav-label">消息与审查</span><NavLink to="/message-center">招聘邮件</NavLink><NavLink to="/reviews">待确认事项</NavLink>
+          <span className="nav-label">系统</span><NavLink to="/settings">设置</NavLink>
         </nav>
-        <div className="phase-note">
-          <span>当前阶段</span>
-          <strong>Part 9 · 集成与治理</strong>
-          <p>全链路搜索、统一审查、备份恢复和个人数据治理。</p>
-        </div>
+        <details className="advanced-nav"><summary>高级与诊断</summary><NavLink to="/workspace">求职总览</NavLink><NavLink to="/data-sources">数据来源诊断</NavLink><NavLink to="/agent-runs">Agent 运行记录</NavLink><NavLink to="/status">运行状态</NavLink><NavLink to="/jobs">后台任务</NavLink></details>
       </aside>
       <main className="content">
         <Routes>
@@ -80,6 +68,7 @@ function Layout() {
           <Route path="/interviews" element={<InterviewCenterPage />} />
           <Route path="/interviews/:id" element={<InterviewDetailPage />} />
           <Route path="/agent-runs" element={<AgentRunsPage />} />
+          <Route path="/settings" element={<SettingsPage />} />
           <Route path="/status" element={<StatusPage />} />
           <Route path="/jobs" element={<JobsPage />} />
           <Route path="*" element={<Navigate to="/status" replace />} />
@@ -119,7 +108,7 @@ function StatusPage() {
       {query.data && (
         <>
           <section className="metric-grid">
-            <article><span>应用版本</span><strong>{query.data.version}</strong><small>Nanobot Runtime</small></article>
+            <article><span>应用版本</span><strong>{query.data.version}</strong><small>CareerConsole Runtime</small></article>
             <article><span>数据库</span><strong>{query.data.database === "ok" ? "正常" : "异常"}</strong><small>SQLite · WAL</small></article>
             <article><span>Schema revision</span><strong>{query.data.database_revision ?? "—"}</strong><small>目标 {query.data.expected_revision}</small></article>
             <article><span>启动恢复任务</span><strong>{query.data.recovered_jobs_at_startup}</strong><small>过期 lease</small></article>
@@ -166,4 +155,9 @@ function JobsPage() {
   );
 }
 
-export default Layout;
+export default function App() {
+  const onboarding = useQuery({ queryKey: ["onboarding"], queryFn: getOnboardingStatus, staleTime: 0 });
+  if (onboarding.isLoading) return <main className="startup-screen"><p>正在启动 CareerConsole…</p></main>;
+  if (onboarding.data?.completed === false) return <OnboardingPage />;
+  return <ProductLayout />;
+}

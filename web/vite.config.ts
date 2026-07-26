@@ -4,7 +4,7 @@ import react from "@vitejs/plugin-react";
 export default defineConfig({
   plugins: [react()],
   build: {
-    outDir: "../nanobot/career/web_dist",
+    outDir: "../career_console/interfaces/http/web_dist",
     emptyOutDir: true,
     sourcemap: false,
   },

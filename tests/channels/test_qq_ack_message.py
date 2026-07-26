@@ -13,7 +13,7 @@ from types import SimpleNamespace
 import pytest
 
 try:
-    from nanobot.channels import qq
+    from career_console.runtime.channels import qq
 
     QQ_AVAILABLE = getattr(qq, "QQ_AVAILABLE", False)
 except ImportError:
@@ -22,8 +22,8 @@ except ImportError:
 if not QQ_AVAILABLE:
     pytest.skip("QQ dependencies not installed (qq-botpy)", allow_module_level=True)
 
-from nanobot.bus.queue import MessageBus
-from nanobot.channels.qq import QQChannel, QQConfig
+from career_console.runtime.bus.queue import MessageBus
+from career_console.runtime.channels.qq import QQChannel, QQConfig
 
 
 class _FakeApi:

@@ -30,11 +30,14 @@ jobs:
     - name: Install all dependencies
       run: uv sync --all-extras
 
+    - name: Lint Python
+      run: uv run ruff check career_console tests migrations
+
     - name: Run tests
       run: uv run pytest tests/
 
-  career-foundation:
-    name: Career foundation (${{ matrix.os }})
+  career-backend-smoke:
+    name: CareerConsole backend (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
@@ -45,10 +48,10 @@ jobs:
       with:
         python-version: "3.12"
     - uses: astral-sh/setup-uv@v4
-    - name: Install Career and test dependencies
+    - name: Install CareerConsole and test dependencies
       run: uv sync --extra dev
-    - name: Run Career foundation tests
-      run: uv run pytest tests/career
+    - name: Run CareerConsole business tests
+      run: uv run pytest tests/product
 
   career-web:
     name: Career web
@@ -65,5 +68,5 @@ jobs:
         cache-dependency-path: web/package-lock.json
     - run: npm ci
     - run: npm run lint
-    - run: npm test
+    - run: npm test -- --run
     - run: npm run build

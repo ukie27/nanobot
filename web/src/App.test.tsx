@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -43,6 +43,150 @@ describe("Career app shell", () => {
     renderApp();
     expect(await screen.findByText("服务就绪")).toBeInTheDocument();
     expect(screen.getByText("20260723_0001")).toBeInTheDocument();
+  });
+
+  it("renders versioned unified settings and change audit", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockImplementation((input: string) => {
+      if (input === "/api/v1/workspace") return Promise.resolve({ ok: true, json: async () => ({
+        product: "CareerConsole", workspace_path: "D:/CareerConsole",
+        active_workspace_path: "D:/CareerConsole", onboarding_required: false,
+        restart_required: false, manifest: { schemaVersion: "career-console.workspace.v1" },
+        paths: { database: "D:/CareerConsole/data/career-console.sqlite3", config: "D:/CareerConsole/config", backups: "D:/CareerConsole/backups", exports: "D:/CareerConsole/exports" },
+      }) });
+      if (input === "/api/v1/configuration/changes") return Promise.resolve({ ok: true, json: async () => ({
+        total: 1, items: [{ id: "change-1", previous_revision: 0, new_revision: 1,
+          changed_paths: ["*"], activation_effect: "restart_required",
+          reason: "初始化工作区配置", created_at: "2026-07-26T00:00:00Z" }],
+      }) });
+      if (input === "/api/v1/configuration/provider-catalog") return Promise.resolve({ ok: true, json: async () => ({
+        total: 1, items: [{ type: "openai", label: "OpenAI", default_api_base: "https://api.openai.com/v1", requires_api_key: true, is_local: false }],
+      }) });
+      if (input === "/api/v1/configuration/providers") return Promise.resolve({ ok: true, json: async () => ({
+        total: 1, items: [{ id: "main", provider_type: "openai", display_name: "主模型", enabled: true,
+          api_base: "https://api.openai.com/v1", default_model: "gpt-main", models: ["gpt-main", "gpt-review"],
+          secret_ref: "career-console:workspace:provider:main:api-key", has_secret: true }],
+      }) });
+      if (input === "/api/v1/configuration/provider-tests") return Promise.resolve({ ok: true, json: async () => ({
+        total: 1, items: [{ id: "test-1", provider_id: "main", provider_type: "openai", model: "gpt-main",
+          status: "passed", error_code: null, duration_ms: 128, created_at: "2026-07-26T00:00:00Z" }],
+      }) });
+      if (input === "/api/v1/channels/qq") return Promise.resolve({ ok: true, json: async () => ({
+        enabled: true, app_id: "102000000", allow_from: [], notification_targets: ["c2c:user-open-id"],
+        event_subscriptions: ["task_reminder", "system_alert"], message_format: "plain", outbound_only: true,
+        quiet_hours: { enabled: true, start: "22:00", end: "08:00", timezone: "Asia/Shanghai" },
+        has_secret: true, configuration_revision: 1,
+      }) });
+      if (input === "/api/v1/channels/deliveries") return Promise.resolve({ ok: true, json: async () => ({
+        total: 1, items: [{ id: "delivery-1", channel_type: "qq", event_type: "connection_test",
+          target_masked: "c2c:sha256:123456789abc", status: "passed", error_code: null,
+          duration_ms: 120, created_at: "2026-07-26T00:00:00Z" }],
+      }) });
+      return Promise.resolve({ ok: true, json: async () => ({
+        schema_version: "career-console.configuration.v1", revision: 1,
+        updated_at: "2026-07-26T00:00:00Z", active_revision: 1,
+        activation_status: "active", configuration: {
+          general: { locale: "zh-CN", timezone: "Asia/Shanghai", date_format: "yyyy-MM-dd", open_browser_on_start: true },
+          appearance: { density: "comfortable", reduce_motion: false },
+          runtime: { log_level: "INFO", log_retention_days: 14, agent_trace_retention_days: 30, job_lease_seconds: 60, max_document_mb: 10 },
+          privacy: { diagnostics_metadata_enabled: true, redact_sensitive_logs: true, local_only_network_binding: true },
+          providers: { main: { provider_type: "openai", display_name: "主模型", enabled: true,
+            api_base: "https://api.openai.com/v1", default_model: "gpt-main", models: ["gpt-main", "gpt-review"],
+            secret_ref: "career-console:workspace:provider:main:api-key" } },
+          agents: { tasks: Object.fromEntries([
+            "fact_extraction", "mail_intelligence", "profile_insight", "job_fit", "resume_direction", "resume_drafting", "material_review",
+          ].map(name => [name, { enabled: true, provider_id: "main", model: name === "material_review" ? "gpt-review" : "gpt-main", temperature: 0.1, max_tokens: 4096, reasoning_effort: null }])) },
+          connectors: { opencli: { executable: null,
+            boss: { enabled: false, profile_alias: "default", search_query: "", city: "全国", result_limit: 15 },
+            nowcoder: { enabled: true, search_query: "", city: "全国", result_limit: 500, schedule_enabled: true, schedule_times: ["09:00"], timezone: "Asia/Shanghai" } },
+            imap: { enabled: false, email_address: "", host: "", port: 993, username: "", folder: "INBOX", initial_lookback_days: 30, poll_interval_minutes: 10, secret_ref: null } },
+          channels: { qq: { enabled: false, app_id: "", allow_from: [], notification_targets: [], event_subscriptions: ["task_reminder", "system_alert"], message_format: "plain", outbound_only: true, quiet_hours: { enabled: false, start: "22:00", end: "08:00", timezone: "Asia/Shanghai" }, secret_ref: null }, send_max_retries: 3 },
+          scheduler: { enabled: true, poll_seconds: 60, reminders_enabled: true, connector_jobs_enabled: true, profile_maintenance_enabled: true, profile_maintenance_time: "21:30", channel_dispatch_enabled: true },
+        },
+      }) });
+    }));
+    renderApp("/settings");
+    expect(await screen.findByRole("heading", { name: "运行维护" })).toBeInTheDocument();
+    expect(screen.getByDisplayValue("Asia/Shanghai")).toBeInTheDocument();
+    expect(screen.getByText("敏感日志脱敏：强制开启")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "数据与迁移" }));
+    expect(screen.getByRole("heading", { name: "迁移、导入与导出" })).toBeInTheDocument();
+    expect(screen.getByText("防 Zip Slip 与链接穿越")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "AI 与 Agent" }));
+    expect(await screen.findByText("主模型 · gpt-main · 凭据已配置")).toBeInTheDocument();
+    expect(screen.getByText("简历撰写（Drafter）")).toBeInTheDocument();
+    expect(screen.getByText("材料复核（Reviewer）")).toBeInTheDocument();
+    expect(screen.getAllByPlaceholderText("已安全保存；留空保持不变").find(element => element.getAttribute("name") === "api_key")).toHaveValue("");
+    expect(screen.queryByDisplayValue("career-console:workspace:provider:main:api-key")).not.toBeInTheDocument();
+    expect(await screen.findByText("main · 通过")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "通知渠道" }));
+    expect(screen.getByRole("heading", { name: "QQ 通知出口" })).toBeInTheDocument();
+    expect(await screen.findByText("凭据已配置")).toBeInTheDocument();
+    expect(screen.getAllByPlaceholderText("已安全保存；留空保持不变").find(element => element.getAttribute("name") === "secret")).toHaveValue("");
+    expect(screen.queryByDisplayValue("qq-secret-value")).not.toBeInTheDocument();
+    expect(await screen.findByText(/c2c:sha256:123456789abc/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "高级诊断" }));
+    expect(await screen.findByText("revision 0 → 1")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "重新进入初始化向导" })).toBeInTheDocument();
+  });
+
+  it("gates the product behind first-run onboarding", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockImplementation((input: string) => {
+      if (input === "/api/v1/onboarding") return Promise.resolve({ ok: true, json: async () => ({
+        schema_version: "career-console.onboarding.v1", onboarding_version: 1,
+        required_version: 1, completed: false, completed_at: null, skipped_steps: [],
+        workspace_ready: false, restart_required: false, runtime_mode: "bootstrap",
+        capabilities: { workspace: false, provider: false, profile: false, mail: false,
+          opencli: false, channel: false, scheduler: true },
+      }) });
+      return Promise.resolve({ ok: true, json: async () => ({
+        product: "CareerConsole", workspace_path: "D:/bootstrap",
+        active_workspace_path: null, onboarding_required: true, restart_required: false,
+        manifest: null, paths: { database: "D:/bootstrap/data/career-console.sqlite3" },
+      }) });
+    }));
+
+    renderApp("/dashboard");
+    expect(await screen.findByRole("heading", { name: "配置你的求职工作台" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "继续" })).toBeDisabled();
+    expect(screen.queryByRole("navigation", { name: "主导航" })).not.toBeInTheDocument();
+  });
+
+  it("allows changing an already selected workspace during onboarding", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockImplementation((input: string) => {
+      if (input === "/api/v1/onboarding") return Promise.resolve({ ok: true, json: async () => ({
+        completed: false, workspace_ready: true, restart_required: false,
+        runtime_mode: "bootstrap", skipped_steps: [],
+        capabilities: { workspace: true, provider: false, profile: false, mail: false,
+          opencli: false, channel: false, scheduler: true },
+      }) });
+      if (input === "/api/v1/workspace") return Promise.resolve({ ok: true, json: async () => ({
+        product: "CareerConsole", workspace_path: "D:/Current/CareerConsole",
+        active_workspace_path: "D:/Current/CareerConsole", onboarding_required: true,
+        restart_required: false, manifest: { schemaVersion: "career-console.workspace.v1" },
+        paths: { database: "D:/Current/CareerConsole/data/career-console.sqlite3" },
+      }) });
+      if (input === "/api/v1/workspace/pick-directory") return Promise.resolve({ ok: true, json: async () => ({
+        cancelled: false, parent_directory: "D:/SelectedParent",
+      }) });
+      return Promise.resolve({ ok: true, json: async () => ({
+        activation_status: "active", configuration: { providers: {}, agents: { tasks: {} } },
+      }) });
+    }));
+
+    renderApp("/dashboard");
+    const change = await screen.findByRole("button", { name: "更换工作区" });
+    expect(screen.getByText("D:/Current/CareerConsole")).toBeInTheDocument();
+    fireEvent.click(change);
+    expect(screen.getByLabelText("父目录")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "选择文件夹" }));
+    expect(await screen.findByDisplayValue("D:/SelectedParent")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "取消更换" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "取消更换" }));
+    expect(screen.getByRole("button", { name: "更换工作区" })).toBeInTheDocument();
   });
 
   it("shows an actionable API error", async () => {
@@ -158,7 +302,7 @@ describe("Career app shell", () => {
       ok: true,
       json: async () => ({ total: 1, items: [{
         id: "run-1", task_type: "profile_fact_extraction", execution_mode: "task",
-        implementation: "nanobot_profile_fact_extractor", provider: "LocalProvider",
+        implementation: "career_console_profile_fact_extractor", provider: "LocalProvider",
         model: "local-model", prompt_version: "profile_fact_extraction.v1", skill_version: null,
         schema_version: "candidate_fact.v1", input_entity_type: "document",
         input_entity_id: "document-1", input_revision: "hash", input_hash: "a".repeat(64),

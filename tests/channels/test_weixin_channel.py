@@ -5,20 +5,20 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
-import pytest
 import httpx
+import pytest
 
-import nanobot.channels.weixin as weixin_mod
-from nanobot.bus.queue import MessageBus
-from nanobot.channels.weixin import (
+import career_console.runtime.channels.weixin as weixin_mod
+from career_console.runtime.bus.queue import MessageBus
+from career_console.runtime.channels.weixin import (
     ITEM_IMAGE,
     ITEM_TEXT,
     MESSAGE_TYPE_BOT,
     WEIXIN_CHANNEL_VERSION,
-    _decrypt_aes_ecb,
-    _encrypt_aes_ecb,
     WeixinChannel,
     WeixinConfig,
+    _decrypt_aes_ecb,
+    _encrypt_aes_ecb,
 )
 
 
@@ -28,7 +28,7 @@ def _make_channel() -> tuple[WeixinChannel, MessageBus]:
         WeixinConfig(
             enabled=True,
             allow_from=["*"],
-            state_dir=tempfile.mkdtemp(prefix="nanobot-weixin-test-"),
+            state_dir=tempfile.mkdtemp(prefix="careerconsole-weixin-test-"),
         ),
         bus,
     )

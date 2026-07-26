@@ -5,12 +5,17 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+
 discord = pytest.importorskip("discord")
 
-from nanobot.bus.events import OutboundMessage
-from nanobot.bus.queue import MessageBus
-from nanobot.channels.discord import DiscordBotClient, DiscordChannel, DiscordConfig
-from nanobot.command.builtin import build_help_text
+from career_console.runtime.bus.events import OutboundMessage  # noqa: E402
+from career_console.runtime.bus.queue import MessageBus  # noqa: E402
+from career_console.runtime.channels.discord import (  # noqa: E402
+    DiscordBotClient,
+    DiscordChannel,
+    DiscordConfig,
+)
+from career_console.runtime.command.builtin import build_help_text  # noqa: E402
 
 
 # Minimal Discord client test double used to control startup/readiness behavior.
@@ -178,7 +183,7 @@ async def test_start_returns_when_discord_dependency_missing(monkeypatch) -> Non
         DiscordConfig(enabled=True, token="token", allow_from=["*"]),
         MessageBus(),
     )
-    monkeypatch.setattr("nanobot.channels.discord.DISCORD_AVAILABLE", False)
+    monkeypatch.setattr("career_console.runtime.channels.discord.DISCORD_AVAILABLE", False)
 
     await channel.start()
 
@@ -197,7 +202,7 @@ async def test_start_handles_client_construction_failure(monkeypatch) -> None:
     def _boom(owner, *, intents):
         raise RuntimeError("bad client")
 
-    monkeypatch.setattr("nanobot.channels.discord.DiscordBotClient", _boom)
+    monkeypatch.setattr("career_console.runtime.channels.discord.DiscordBotClient", _boom)
 
     await channel.start()
 
@@ -215,7 +220,7 @@ async def test_start_handles_client_start_failure(monkeypatch) -> None:
 
     _FakeDiscordClient.instances.clear()
     _FakeDiscordClient.start_error = RuntimeError("connect failed")
-    monkeypatch.setattr("nanobot.channels.discord.DiscordBotClient", _FakeDiscordClient)
+    monkeypatch.setattr("career_console.runtime.channels.discord.DiscordBotClient", _FakeDiscordClient)
 
     await channel.start()
 
@@ -344,7 +349,7 @@ async def test_on_message_downloads_attachments(tmp_path, monkeypatch) -> None:
         handled.append(kwargs)
 
     channel._handle_message = capture_handle  # type: ignore[method-assign]
-    monkeypatch.setattr("nanobot.channels.discord.get_media_dir", lambda _name: tmp_path)
+    monkeypatch.setattr("career_console.runtime.channels.discord.get_media_dir", lambda _name: tmp_path)
 
     await channel._on_message(
         _make_message(
@@ -368,7 +373,7 @@ async def test_on_message_marks_failed_attachment_download(tmp_path, monkeypatch
         handled.append(kwargs)
 
     channel._handle_message = capture_handle  # type: ignore[method-assign]
-    monkeypatch.setattr("nanobot.channels.discord.get_media_dir", lambda _name: tmp_path)
+    monkeypatch.setattr("career_console.runtime.channels.discord.get_media_dir", lambda _name: tmp_path)
 
     await channel._on_message(
         _make_message(

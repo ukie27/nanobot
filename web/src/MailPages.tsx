@@ -20,11 +20,11 @@ const eventLabel: Record<string, string> = {
   rejected: "拒信", offer: "Offer",
 };
 
-export function MessageCenterPage() {
+export function MessageCenterPage({ setupOnly = false }: { setupOnly?: boolean }) {
   const cache = useQueryClient();
   const connector = useQuery({ queryKey: ["mail-connector"], queryFn: getMailConnector });
-  const messages = useQuery({ queryKey: ["mail-messages"], queryFn: getMailMessages });
-  const applications = useQuery({ queryKey: ["applications"], queryFn: getApplications });
+  const messages = useQuery({ queryKey: ["mail-messages"], queryFn: getMailMessages, enabled: !setupOnly });
+  const applications = useQuery({ queryKey: ["applications"], queryFn: getApplications, enabled: !setupOnly });
   const [form, setForm] = useState(initial);
   const [notice, setNotice] = useState("");
   const [selectedApplications, setSelectedApplications] = useState<Record<string, string>>({});
@@ -87,6 +87,7 @@ export function MessageCenterPage() {
         <div className="form-actions wide"><button type="submit" disabled={save.isPending}>保存设置</button><button type="button" className="secondary" disabled={!connector.data?.configured || test.isPending} onClick={() => test.mutate()}>测试只读连接</button><button type="button" disabled={!connector.data?.enabled || sync.isPending} onClick={() => sync.mutate()}>立即同步</button>{connector.data?.configured && <button type="button" className="danger" disabled={remove.isPending} onClick={() => { if (window.confirm("删除邮箱配置、同步消息和系统凭据？")) remove.mutate(); }}>删除账户</button>}</div>
       </form>
     </section>
+    {!setupOnly && <>
     <section className="notice manual-history"><strong>一个月以前的进度</strong><p>邮箱 Connector 不扫描 30 天以前的邮件。请到 <a href="/applications">申请看板</a> 打开对应申请，手动录入已发生的投递、笔试、面试、Offer 或拒绝进度；时间按北京时间填写。</p></section>
     <section className="mail-grid">
       <div className="mail-list">
@@ -103,5 +104,6 @@ export function MessageCenterPage() {
       </div>
       <section className="panel sync-history"><div className="panel-heading"><h2>同步记录</h2><span>每 10 分钟</span></div>{connector.data?.runs.map(run => <article key={run.id}><strong>{run.status}</strong><span>{formatChinaTime(run.started_at)}（北京时间）</span><small>发现 {run.discovered_count} · 新增 {run.created_count} · 重复 {run.duplicate_count}{run.error_code ? ` · ${run.error_code}` : ""}</small></article>)}</section>
     </section>
+    </>}
   </>;
 }

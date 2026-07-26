@@ -5,8 +5,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from nanobot.bus.events import OutboundMessage
-from nanobot.channels.whatsapp import WhatsAppChannel
+from career_console.runtime.bus.events import OutboundMessage
+from career_console.runtime.channels.whatsapp import WhatsAppChannel
 
 
 def _make_channel() -> WhatsAppChannel:

@@ -5,8 +5,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from nanobot.bus.queue import MessageBus
-from nanobot.channels.feishu import FeishuChannel, FeishuConfig, _FeishuStreamBuf
+from career_console.runtime.bus.queue import MessageBus
+from career_console.runtime.channels.feishu import FeishuChannel, FeishuConfig, _FeishuStreamBuf
 
 
 def _make_channel(streaming: bool = True) -> FeishuChannel:

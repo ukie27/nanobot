@@ -420,6 +420,138 @@ wheels = [
 ]
 
 [[package]]
+name = "career-console"
+version = "0.1.0.dev0"
+source = { editable = "." }
+dependencies = [
+    { name = "alembic" },
+    { name = "anthropic" },
+    { name = "chardet" },
+    { name = "croniter" },
+    { name = "cryptography" },
+    { name = "ddgs" },
+    { name = "dingtalk-stream" },
+    { name = "fastapi" },
+    { name = "filelock" },
+    { name = "httpx" },
+    { name = "json-repair" },
+    { name = "keyring" },
+    { name = "lark-oapi" },
+    { name = "loguru" },
+    { name = "mcp" },
+    { name = "msgpack" },
+    { name = "oauth-cli-kit" },
+    { name = "openai" },
+    { name = "pydantic" },
+    { name = "pydantic-settings" },
+    { name = "pypdf" },
+    { name = "pypdfium2" },
+    { name = "python-docx" },
+    { name = "python-multipart" },
+    { name = "python-socketio" },
+    { name = "python-socks" },
+    { name = "python-telegram-bot", extra = ["socks"] },
+    { name = "qq-botpy" },
+    { name = "readability-lxml" },
+    { name = "reportlab" },
+    { name = "rich" },
+    { name = "slack-sdk" },
+    { name = "slackify-markdown" },
+    { name = "socksio" },
+    { name = "sqlalchemy" },
+    { name = "tiktoken" },
+    { name = "typer" },
+    { name = "uvicorn" },
+    { name = "websocket-client" },
+    { name = "websockets" },
+]
+
+[package.optional-dependencies]
+dev = [
+    { name = "aiohttp" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "pytest-cov" },
+    { name = "ruff" },
+]
+discord = [
+    { name = "discord-py" },
+]
+langsmith = [
+    { name = "langsmith" },
+]
+matrix = [
+    { name = "matrix-nio", extra = ["e2e"] },
+    { name = "mistune" },
+    { name = "nh3" },
+]
+wecom = [
+    { name = "wecom-aibot-sdk-python" },
+]
+weixin = [
+    { name = "pycryptodome" },
+    { name = "qrcode", extra = ["pil"] },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "aiohttp", marker = "extra == 'dev'", specifier = ">=3.9.0,<4.0.0" },
+    { name = "alembic", specifier = ">=1.16.0,<2.0.0" },
+    { name = "anthropic", specifier = ">=0.45.0,<1.0.0" },
+    { name = "chardet", specifier = ">=3.0.2,<6.0.0" },
+    { name = "croniter", specifier = ">=6.0.0,<7.0.0" },
+    { name = "cryptography", specifier = ">=45.0.0,<50.0.0" },
+    { name = "ddgs", specifier = ">=9.5.5,<10.0.0" },
+    { name = "dingtalk-stream", specifier = ">=0.24.0,<1.0.0" },
+    { name = "discord-py", marker = "extra == 'discord'", specifier = ">=2.5.2,<3.0.0" },
+    { name = "fastapi", specifier = ">=0.116.0,<1.0.0" },
+    { name = "filelock", specifier = ">=3.18.0,<4.0.0" },
+    { name = "httpx", specifier = ">=0.28.0,<1.0.0" },
+    { name = "json-repair", specifier = ">=0.57.0,<1.0.0" },
+    { name = "keyring", specifier = ">=25.0.0,<26.0.0" },
+    { name = "langsmith", marker = "extra == 'langsmith'", specifier = ">=0.1.0" },
+    { name = "lark-oapi", specifier = ">=1.5.0,<2.0.0" },
+    { name = "loguru", specifier = ">=0.7.3,<1.0.0" },
+    { name = "matrix-nio", extras = ["e2e"], marker = "extra == 'matrix'", specifier = ">=0.25.2" },
+    { name = "mcp", specifier = ">=1.26.0,<2.0.0" },
+    { name = "mistune", marker = "extra == 'matrix'", specifier = ">=3.0.0,<4.0.0" },
+    { name = "msgpack", specifier = ">=1.1.0,<2.0.0" },
+    { name = "nh3", marker = "extra == 'matrix'", specifier = ">=0.2.17,<1.0.0" },
+    { name = "oauth-cli-kit", specifier = ">=0.1.3,<1.0.0" },
+    { name = "openai", specifier = ">=2.8.0" },
+    { name = "pycryptodome", marker = "extra == 'weixin'", specifier = ">=3.20.0" },
+    { name = "pydantic", specifier = ">=2.12.0,<3.0.0" },
+    { name = "pydantic-settings", specifier = ">=2.12.0,<3.0.0" },
+    { name = "pypdf", specifier = ">=5.7.0,<7.0.0" },
+    { name = "pypdfium2", specifier = ">=4.30.0,<5.0.0" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=9.0.0,<10.0.0" },
+    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=1.3.0,<2.0.0" },
+    { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=6.0.0,<7.0.0" },
+    { name = "python-docx", specifier = ">=1.2.0,<2.0.0" },
+    { name = "python-multipart", specifier = ">=0.0.20,<1.0.0" },
+    { name = "python-socketio", specifier = ">=5.16.0,<6.0.0" },
+    { name = "python-socks", extras = ["asyncio"], specifier = ">=2.8.0,<3.0.0" },
+    { name = "python-telegram-bot", extras = ["socks"], specifier = ">=22.6,<23.0" },
+    { name = "qq-botpy", specifier = ">=1.2.0,<2.0.0" },
+    { name = "qrcode", extras = ["pil"], marker = "extra == 'weixin'", specifier = ">=8.0" },
+    { name = "readability-lxml", specifier = ">=0.8.4,<1.0.0" },
+    { name = "reportlab", specifier = ">=4.4.0,<5.0.0" },
+    { name = "rich", specifier = ">=14.0.0,<15.0.0" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.1.0" },
+    { name = "slack-sdk", specifier = ">=3.39.0,<4.0.0" },
+    { name = "slackify-markdown", specifier = ">=0.2.0,<1.0.0" },
+    { name = "socksio", specifier = ">=1.0.0,<2.0.0" },
+    { name = "sqlalchemy", specifier = ">=2.0.41,<3.0.0" },
+    { name = "tiktoken", specifier = ">=0.12.0,<1.0.0" },
+    { name = "typer", specifier = ">=0.20.0,<1.0.0" },
+    { name = "uvicorn", specifier = ">=0.35.0,<1.0.0" },
+    { name = "websocket-client", specifier = ">=1.9.0,<2.0.0" },
+    { name = "websockets", specifier = ">=16.0,<17.0" },
+    { name = "wecom-aibot-sdk-python", marker = "extra == 'wecom'", specifier = ">=0.1.5" },
+]
+provides-extras = ["wecom", "weixin", "matrix", "discord", "langsmith", "dev"]
+
+[[package]]
 name = "certifi"
 version = "2026.7.22"
 source = { registry = "https://pypi.org/simple" }
@@ -1892,144 +2024,6 @@ wheels = [
 ]
 
 [[package]]
-name = "nanobot-ai"
-version = "0.1.4.post9"
-source = { editable = "." }
-dependencies = [
-    { name = "alembic" },
-    { name = "anthropic" },
-    { name = "chardet" },
-    { name = "croniter" },
-    { name = "ddgs" },
-    { name = "dingtalk-stream" },
-    { name = "fastapi" },
-    { name = "filelock" },
-    { name = "httpx" },
-    { name = "json-repair" },
-    { name = "keyring" },
-    { name = "lark-oapi" },
-    { name = "loguru" },
-    { name = "mcp" },
-    { name = "msgpack" },
-    { name = "oauth-cli-kit" },
-    { name = "openai" },
-    { name = "prompt-toolkit" },
-    { name = "pydantic" },
-    { name = "pydantic-settings" },
-    { name = "pypdf" },
-    { name = "pypdfium2" },
-    { name = "python-docx" },
-    { name = "python-multipart" },
-    { name = "python-socketio" },
-    { name = "python-socks" },
-    { name = "python-telegram-bot", extra = ["socks"] },
-    { name = "qq-botpy" },
-    { name = "questionary" },
-    { name = "readability-lxml" },
-    { name = "reportlab" },
-    { name = "rich" },
-    { name = "slack-sdk" },
-    { name = "slackify-markdown" },
-    { name = "socksio" },
-    { name = "sqlalchemy" },
-    { name = "tiktoken" },
-    { name = "typer" },
-    { name = "uvicorn" },
-    { name = "websocket-client" },
-    { name = "websockets" },
-]
-
-[package.optional-dependencies]
-api = [
-    { name = "aiohttp" },
-]
-dev = [
-    { name = "aiohttp" },
-    { name = "pytest" },
-    { name = "pytest-asyncio" },
-    { name = "pytest-cov" },
-    { name = "ruff" },
-]
-discord = [
-    { name = "discord-py" },
-]
-langsmith = [
-    { name = "langsmith" },
-]
-matrix = [
-    { name = "matrix-nio", extra = ["e2e"] },
-    { name = "mistune" },
-    { name = "nh3" },
-]
-wecom = [
-    { name = "wecom-aibot-sdk-python" },
-]
-weixin = [
-    { name = "pycryptodome" },
-    { name = "qrcode", extra = ["pil"] },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "aiohttp", marker = "extra == 'api'", specifier = ">=3.9.0,<4.0.0" },
-    { name = "aiohttp", marker = "extra == 'dev'", specifier = ">=3.9.0,<4.0.0" },
-    { name = "alembic", specifier = ">=1.16.0,<2.0.0" },
-    { name = "anthropic", specifier = ">=0.45.0,<1.0.0" },
-    { name = "chardet", specifier = ">=3.0.2,<6.0.0" },
-    { name = "croniter", specifier = ">=6.0.0,<7.0.0" },
-    { name = "ddgs", specifier = ">=9.5.5,<10.0.0" },
-    { name = "dingtalk-stream", specifier = ">=0.24.0,<1.0.0" },
-    { name = "discord-py", marker = "extra == 'discord'", specifier = ">=2.5.2,<3.0.0" },
-    { name = "fastapi", specifier = ">=0.116.0,<1.0.0" },
-    { name = "filelock", specifier = ">=3.18.0,<4.0.0" },
-    { name = "httpx", specifier = ">=0.28.0,<1.0.0" },
-    { name = "json-repair", specifier = ">=0.57.0,<1.0.0" },
-    { name = "keyring", specifier = ">=25.0.0,<26.0.0" },
-    { name = "langsmith", marker = "extra == 'langsmith'", specifier = ">=0.1.0" },
-    { name = "lark-oapi", specifier = ">=1.5.0,<2.0.0" },
-    { name = "loguru", specifier = ">=0.7.3,<1.0.0" },
-    { name = "matrix-nio", extras = ["e2e"], marker = "extra == 'matrix'", specifier = ">=0.25.2" },
-    { name = "mcp", specifier = ">=1.26.0,<2.0.0" },
-    { name = "mistune", marker = "extra == 'matrix'", specifier = ">=3.0.0,<4.0.0" },
-    { name = "msgpack", specifier = ">=1.1.0,<2.0.0" },
-    { name = "nh3", marker = "extra == 'matrix'", specifier = ">=0.2.17,<1.0.0" },
-    { name = "oauth-cli-kit", specifier = ">=0.1.3,<1.0.0" },
-    { name = "openai", specifier = ">=2.8.0" },
-    { name = "prompt-toolkit", specifier = ">=3.0.50,<4.0.0" },
-    { name = "pycryptodome", marker = "extra == 'weixin'", specifier = ">=3.20.0" },
-    { name = "pydantic", specifier = ">=2.12.0,<3.0.0" },
-    { name = "pydantic-settings", specifier = ">=2.12.0,<3.0.0" },
-    { name = "pypdf", specifier = ">=5.7.0,<7.0.0" },
-    { name = "pypdfium2", specifier = ">=4.30.0,<5.0.0" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=9.0.0,<10.0.0" },
-    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=1.3.0,<2.0.0" },
-    { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=6.0.0,<7.0.0" },
-    { name = "python-docx", specifier = ">=1.2.0,<2.0.0" },
-    { name = "python-multipart", specifier = ">=0.0.20,<1.0.0" },
-    { name = "python-socketio", specifier = ">=5.16.0,<6.0.0" },
-    { name = "python-socks", extras = ["asyncio"], specifier = ">=2.8.0,<3.0.0" },
-    { name = "python-telegram-bot", extras = ["socks"], specifier = ">=22.6,<23.0" },
-    { name = "qq-botpy", specifier = ">=1.2.0,<2.0.0" },
-    { name = "qrcode", extras = ["pil"], marker = "extra == 'weixin'", specifier = ">=8.0" },
-    { name = "questionary", specifier = ">=2.0.0,<3.0.0" },
-    { name = "readability-lxml", specifier = ">=0.8.4,<1.0.0" },
-    { name = "reportlab", specifier = ">=4.4.0,<5.0.0" },
-    { name = "rich", specifier = ">=14.0.0,<15.0.0" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.1.0" },
-    { name = "slack-sdk", specifier = ">=3.39.0,<4.0.0" },
-    { name = "slackify-markdown", specifier = ">=0.2.0,<1.0.0" },
-    { name = "socksio", specifier = ">=1.0.0,<2.0.0" },
-    { name = "sqlalchemy", specifier = ">=2.0.41,<3.0.0" },
-    { name = "tiktoken", specifier = ">=0.12.0,<1.0.0" },
-    { name = "typer", specifier = ">=0.20.0,<1.0.0" },
-    { name = "uvicorn", specifier = ">=0.35.0,<1.0.0" },
-    { name = "websocket-client", specifier = ">=1.9.0,<2.0.0" },
-    { name = "websockets", specifier = ">=16.0,<17.0" },
-    { name = "wecom-aibot-sdk-python", marker = "extra == 'wecom'", specifier = ">=0.1.5" },
-]
-provides-extras = ["api", "wecom", "weixin", "matrix", "discord", "langsmith", "dev"]
-
-[[package]]
 name = "nh3"
 version = "0.3.6"
 source = { registry = "https://pypi.org/simple" }
@@ -2320,18 +2314,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/e2/49/e8c8a7bc6b741ab6f15896022eee4f906d04d7ccd15aeeb515dd04bbeb6d/primp-1.3.1-cp314-cp314t-win32.whl", hash = "sha256:4346dcef805279028bf4a54bb87dd43d0920130e25b5790689f5c96c9ba0d9e5", size = 4262615, upload-time = "2026-05-23T17:39:13.88Z" },
     { url = "https://files.pythonhosted.org/packages/a9/84/7ae4a257dec6dff329d4a8d9051d907316095c27ffc8d1ea15c359e6eeb5/primp-1.3.1-cp314-cp314t-win_amd64.whl", hash = "sha256:6c55f152a73b6d6af8ac37bdb648d8bbfd7e656f9ef40d87feb3c0d81cee930a", size = 4660584, upload-time = "2026-05-23T17:39:10.081Z" },
     { url = "https://files.pythonhosted.org/packages/99/20/10e0d96bfaeef1f0cd339ccf9bb8feb4bf798fde93198f7a96c73441080a/primp-1.3.1-cp314-cp314t-win_arm64.whl", hash = "sha256:46a529d74583d6ceba52e15bf4c678fcf24e6d669c1ce935262d5490d1b25801", size = 4623226, upload-time = "2026-05-23T17:38:57.256Z" },
-]
-
-[[package]]
-name = "prompt-toolkit"
-version = "3.0.52"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "wcwidth" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/a1/96/06e01a7b38dce6fe1db213e061a4602dd6032a8a97ef6c1a862537732421/prompt_toolkit-3.0.52.tar.gz", hash = "sha256:28cde192929c8e7321de85de1ddbe736f1375148b02f2e17edd840042b1be855", size = 434198, upload-time = "2025-08-27T15:24:02.057Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/84/03/0d3ce49e2505ae70cf43bc5bb3033955d2fc9f932163e84dc0779cc47f48/prompt_toolkit-3.0.52-py3-none-any.whl", hash = "sha256:9aac639a3bbd33284347de5ad8d68ecc044b91a762dc39b7c21095fcd6a19955", size = 391431, upload-time = "2025-08-27T15:23:59.498Z" },
 ]
 
 [[package]]
@@ -2937,18 +2919,6 @@ wheels = [
 [package.optional-dependencies]
 pil = [
     { name = "pillow" },
-]
-
-[[package]]
-name = "questionary"
-version = "2.1.1"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "prompt-toolkit" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/f6/45/eafb0bba0f9988f6a2520f9ca2df2c82ddfa8d67c95d6625452e97b204a5/questionary-2.1.1.tar.gz", hash = "sha256:3d7e980292bb0107abaa79c68dd3eee3c561b83a0f89ae482860b181c8bd412d", size = 25845, upload-time = "2025-08-28T19:00:20.851Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/3c/26/1062c7ec1b053db9e499b4d2d5bc231743201b74051c973dadeac80a8f43/questionary-2.1.1-py3-none-any.whl", hash = "sha256:a51af13f345f1cdea62347589fbb6df3b290306ab8930713bfae4d475a7d4a59", size = 36753, upload-time = "2025-08-28T19:00:19.56Z" },
 ]
 
 [[package]]
@@ -3734,15 +3704,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/a2/65/b7c6c443ccc58678c91e1e973bbe2a878591538655d6e1d47f24ba1c51f3/uvicorn-0.51.0.tar.gz", hash = "sha256:f6f4b69b657c312f516dd2d268ab9ae6f254b11e4bac504f37b2ab58b24dd0b0", size = 94412, upload-time = "2026-07-08T10:59:05.962Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/45/ec/dbb7e5a6b91f86bfb9eb7d2988a2730907b6a729875b949c7f022e8b88fa/uvicorn-0.51.0-py3-none-any.whl", hash = "sha256:5d38af6cd620f2ae3849fb44fd4879e0890aa1febe8d47eb355fb45d93fe6a5b", size = 73219, upload-time = "2026-07-08T10:59:04.44Z" },
-]
-
-[[package]]
-name = "wcwidth"
-version = "0.8.2"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/34/74/c6428f875774288bec1396f5bfcbc2d925700a4dad61727fd5f2b12f249d/wcwidth-0.8.2.tar.gz", hash = "sha256:91fbef97204b96a3d4d421609b80340b760cf33e26da123ff243d76b1fda8dda", size = 1466253, upload-time = "2026-06-29T18:11:11.601Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/96/42/3e5985a0a7e57de470b320c6d6a1a67c844f6737a587f3d44dd13d1819e7/wcwidth-0.8.2-py3-none-any.whl", hash = "sha256:d63947694a0539a1d51e01eda7caf800c291020e6cdd7e28ad7b14dd33ad4f85", size = 323166, upload-time = "2026-06-29T18:11:09.888Z" },
 ]
 
 [[package]]

@@ -1,8 +1,9 @@
+import sys
 from typing import Any
 
-from nanobot.agent.tools.base import Tool
-from nanobot.agent.tools.registry import ToolRegistry
-from nanobot.agent.tools.shell import ExecTool
+from career_console.runtime.agent.tools.base import Tool
+from career_console.runtime.agent.tools.registry import ToolRegistry
+from career_console.runtime.agent.tools.shell import ExecTool
 
 
 class SampleTool(Tool):
@@ -117,28 +118,28 @@ def test_exec_extract_absolute_paths_captures_posix_absolute_paths() -> None:
 
 
 def test_exec_extract_absolute_paths_captures_home_paths() -> None:
-    cmd = "cat ~/.nanobot/config.json > ~/out.txt"
+    cmd = "cat ~/.career_console/runtime/config.json > ~/out.txt"
     paths = ExecTool._extract_absolute_paths(cmd)
-    assert "~/.nanobot/config.json" in paths
+    assert "~/.career_console/runtime/config.json" in paths
     assert "~/out.txt" in paths
 
 
 def test_exec_extract_absolute_paths_captures_quoted_paths() -> None:
-    cmd = 'cat "/tmp/data.txt" "~/.nanobot/config.json"'
+    cmd = 'cat "/tmp/data.txt" "~/.career_console/runtime/config.json"'
     paths = ExecTool._extract_absolute_paths(cmd)
     assert "/tmp/data.txt" in paths
-    assert "~/.nanobot/config.json" in paths
+    assert "~/.career_console/runtime/config.json" in paths
 
 
 def test_exec_guard_blocks_home_path_outside_workspace(tmp_path) -> None:
     tool = ExecTool(restrict_to_workspace=True)
-    error = tool._guard_command("cat ~/.nanobot/config.json", str(tmp_path))
+    error = tool._guard_command("cat ~/.career_console/runtime/config.json", str(tmp_path))
     assert error == "Error: Command blocked by safety guard (path outside working dir)"
 
 
 def test_exec_guard_blocks_quoted_home_path_outside_workspace(tmp_path) -> None:
     tool = ExecTool(restrict_to_workspace=True)
-    error = tool._guard_command('cat "~/.nanobot/config.json"', str(tmp_path))
+    error = tool._guard_command('cat "~/.career_console/runtime/config.json"', str(tmp_path))
     assert error == "Error: Command blocked by safety guard (path outside working dir)"
 
 
@@ -148,7 +149,7 @@ def test_exec_guard_allows_media_path_outside_workspace(tmp_path, monkeypatch) -
     media_file = media_dir / "photo.jpg"
     media_file.write_text("ok", encoding="utf-8")
 
-    monkeypatch.setattr("nanobot.agent.tools.shell.get_media_dir", lambda: media_dir)
+    monkeypatch.setattr("career_console.runtime.agent.tools.shell.get_media_dir", lambda: media_dir)
 
     tool = ExecTool(restrict_to_workspace=True)
     error = tool._guard_command(f'cat "{media_file}"', str(tmp_path / "workspace"))
@@ -156,7 +157,7 @@ def test_exec_guard_allows_media_path_outside_workspace(tmp_path, monkeypatch) -
 
 
 def test_exec_guard_blocks_windows_drive_root_outside_workspace(monkeypatch) -> None:
-    import nanobot.agent.tools.shell as shell_mod
+    import career_console.runtime.agent.tools.shell as shell_mod
 
     class FakeWindowsPath:
         def __init__(self, raw: str) -> None:
@@ -442,7 +443,7 @@ async def test_exec_head_tail_truncation() -> None:
     # Generate output that exceeds _MAX_OUTPUT (10_000 chars)
     # Use python to generate output to avoid command line length limits
     result = await tool.execute(
-        command="python -c \"print('A' * 6000 + '\\n' + 'B' * 6000)\""
+        command=f'"{sys.executable}" -c "print(\'A\' * 6000 + \'\\n\' + \'B\' * 6000)"'
     )
     assert "chars truncated" in result
     # Head portion should start with As
@@ -455,7 +456,8 @@ async def test_exec_timeout_parameter() -> None:
     """LLM-supplied timeout should override the constructor default."""
     tool = ExecTool(timeout=60)
     # A very short timeout should cause the command to be killed
-    result = await tool.execute(command="sleep 10", timeout=1)
+    command = f'"{sys.executable}" -c "import time; time.sleep(10)"'
+    result = await tool.execute(command=command, timeout=1)
     assert "timed out" in result
     assert "1 seconds" in result
 

@@ -14,29 +14,30 @@ RUN apt-get update && \
 
 WORKDIR /app
 
-# Install Python dependencies first (cached layer)
-COPY pyproject.toml README.md LICENSE ./
-RUN mkdir -p nanobot bridge && touch nanobot/__init__.py && \
-    uv pip install --system --no-cache . && \
-    rm -rf nanobot bridge
+# Install locked Python dependencies first (cached layer).
+COPY pyproject.toml uv.lock README.md LICENSE THIRD_PARTY_NOTICES.md ./
+RUN uv export --frozen --no-dev --no-emit-project --output-file /tmp/requirements.txt && \
+    uv pip install --system --no-cache -r /tmp/requirements.txt
 
 # Copy the full source and install
-COPY nanobot/ nanobot/
-COPY bridge/ bridge/
-RUN uv pip install --system --no-cache .
+COPY career_console/ career_console/
+COPY integrations/whatsapp-bridge/ integrations/whatsapp-bridge/
+COPY migrations/ migrations/
+COPY alembic.ini ./
+RUN uv pip install --system --no-cache --no-deps .
 
 # Build the WhatsApp bridge
 RUN git config --global url."https://github.com/".insteadOf "ssh://git@github.com/"
 
-WORKDIR /app/bridge
-RUN npm install && npm run build
+WORKDIR /app/integrations/whatsapp-bridge
+RUN npm ci && npm run build
 WORKDIR /app
 
 # Create config directory
-RUN mkdir -p /root/.nanobot
+RUN mkdir -p /data/CareerConsole
 
-# Gateway default port
-EXPOSE 18790
+# CareerConsole Web/API port
+EXPOSE 8765
 
-ENTRYPOINT ["nanobot"]
-CMD ["status"]
+ENTRYPOINT ["career-console"]
+CMD ["serve", "--workspace", "/data/CareerConsole", "--host", "0.0.0.0", "--port", "8765"]

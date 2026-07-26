@@ -15,6 +15,140 @@ export interface SystemStatus {
   paths: SystemPaths;
 }
 
+export interface WorkspaceStatus {
+  product: "CareerConsole"; workspace_path: string; active_workspace_path: string | null;
+  onboarding_required: boolean; restart_required: boolean;
+  manifest: null | { schemaVersion: string; workspaceId: string; name: string;
+    product: string; createdAt: string; lastOpenedAt: string; portable: boolean;
+    paths: Record<string, string> };
+  paths: Record<string, string>;
+}
+
+export interface WorkspaceValidation {
+  parent_directory: string; workspace_path: string; valid: boolean; error: string | null;
+}
+
+export interface WorkspaceDirectorySelection {
+  cancelled: boolean; parent_directory: string | null;
+}
+
+export interface OnboardingStatus {
+  schema_version: string;
+  onboarding_version: number;
+  required_version: number;
+  completed: boolean;
+  completed_at: string | null;
+  skipped_steps: string[];
+  workspace_ready: boolean;
+  restart_required: boolean;
+  runtime_mode: "bootstrap" | "product";
+  capabilities: Record<"workspace" | "provider" | "profile" | "mail" | "opencli" | "channel" | "scheduler", boolean>;
+}
+
+export interface PortableWorkspaceExport {
+  filename: string; path: string; sha256: string; size_bytes: number;
+  file_count: number; secrets_included: boolean; download_url: string;
+}
+
+export interface PortableWorkspaceImport {
+  workspace_path: string; workspace_id: string; database_revision: string;
+  secrets_restored: number; restart_required: boolean;
+}
+
+export interface CareerConsoleConfiguration {
+  general: {
+    locale: "zh-CN" | "en-US"; timezone: string;
+    date_format: "yyyy-MM-dd" | "yyyy/MM/dd"; open_browser_on_start: boolean;
+  };
+  appearance: { density: "comfortable" | "compact"; reduce_motion: boolean };
+  runtime: {
+    log_level: "DEBUG" | "INFO" | "WARNING" | "ERROR";
+    log_retention_days: number; agent_trace_retention_days: number;
+    job_lease_seconds: number; max_document_mb: number;
+  };
+  privacy: {
+    diagnostics_metadata_enabled: boolean;
+    redact_sensitive_logs: true; local_only_network_binding: true;
+  };
+  providers: Record<string, ProviderConfiguration>;
+  agents: AgentConfiguration;
+  connectors: {
+    opencli: {
+      executable: string | null;
+      boss: { enabled: boolean; profile_alias: string; search_query: string; city: string; result_limit: number };
+      nowcoder: { enabled: boolean; search_query: string; city: string; result_limit: number;
+        schedule_enabled: boolean; schedule_times: string[]; timezone: "Asia/Shanghai" };
+    };
+    imap: { enabled: boolean; email_address: string; host: string; port: number;
+      username: string; folder: "INBOX"; initial_lookback_days: number;
+      poll_interval_minutes: number; secret_ref: string | null };
+  };
+  channels: {
+    qq: { enabled: boolean; app_id: string; allow_from: string[];
+      notification_targets: string[]; event_subscriptions: string[];
+      message_format: "plain" | "markdown"; outbound_only: true;
+      quiet_hours: { enabled: boolean; start: string; end: string; timezone: "Asia/Shanghai" };
+      secret_ref: string | null };
+    send_max_retries: number;
+  };
+  scheduler: { enabled: boolean; poll_seconds: number; reminders_enabled: boolean;
+    connector_jobs_enabled: boolean; profile_maintenance_enabled: boolean;
+    profile_maintenance_time: string; channel_dispatch_enabled: boolean };
+}
+
+export type ProviderType = "custom" | "azure_openai" | "anthropic" | "openai" |
+  "openrouter" | "deepseek" | "gemini" | "zhipu" | "dashscope" | "moonshot" |
+  "minimax" | "mistral" | "stepfun" | "xiaomi_mimo" | "aihubmix" |
+  "siliconflow" | "volcengine" | "volcengine_coding_plan" | "byteplus" |
+  "byteplus_coding_plan" | "groq" | "ollama" | "vllm" | "ovms";
+export interface ProviderConfiguration {
+  provider_type: ProviderType; display_name: string; enabled: boolean;
+  api_base: string | null; default_model: string; models: string[];
+  secret_ref: string | null;
+}
+export interface ProviderView extends ProviderConfiguration { id: string; has_secret: boolean }
+export interface ProviderCatalogItem {
+  type: ProviderType; label: string; default_api_base: string | null;
+  requires_api_key: boolean; is_local: boolean;
+}
+export interface AgentTaskConfiguration {
+  enabled: boolean; provider_id: string | null; model: string | null;
+  temperature: number; max_tokens: number;
+  reasoning_effort: "low" | "medium" | "high" | null;
+}
+export type AgentTaskName = "fact_extraction" | "mail_intelligence" | "profile_insight" |
+  "job_fit" | "resume_direction" | "resume_drafting" | "material_review";
+export interface AgentConfiguration { tasks: Record<AgentTaskName, AgentTaskConfiguration> }
+export interface ProviderTestRun {
+  id: string; provider_id: string; provider_type: ProviderType; model: string;
+  status: "passed" | "failed"; error_code: string | null;
+  duration_ms: number; created_at: string;
+}
+export interface QQChannelView extends Omit<CareerConsoleConfiguration["channels"]["qq"], "secret_ref"> {
+  has_secret: boolean; configuration_revision: number;
+}
+export interface ChannelDeliveryRun {
+  id: string; channel_type: "qq"; event_type: string; target_masked: string;
+  status: "passed" | "failed"; error_code: string | null;
+  duration_ms: number; created_at: string;
+}
+export interface SchedulerRun {
+  id: string; trigger_type: string; status: string; counters: Record<string, number>;
+  error_codes: string[]; started_at: string; finished_at: string;
+}
+
+export interface ConfigurationStatus {
+  schema_version: string; revision: number; updated_at: string;
+  active_revision: number; activation_status: "active" | "restart_required";
+  configuration: CareerConsoleConfiguration;
+  changed_paths?: string[]; activation_effect?: "hot_reload" | "service_reload" | "restart_required" | null;
+}
+
+export interface ConfigurationChange {
+  id: string; previous_revision: number; new_revision: number; changed_paths: string[];
+  activation_effect: string; reason: string; created_at: string;
+}
+
 export interface BackgroundJob {
   id: string;
   job_type: string;
@@ -551,10 +685,85 @@ async function parseResponse<T>(response: Response): Promise<T> {
 }
 
 export const getSystemStatus = () => getJson<SystemStatus>("/api/v1/system/status");
+export const getOnboardingStatus = () => getJson<OnboardingStatus>("/api/v1/onboarding");
+export const completeOnboarding = (skipped_steps: string[]) =>
+  sendJson<OnboardingStatus>("/api/v1/onboarding/complete", { skipped_steps });
+export const reopenOnboarding = () => sendJson<OnboardingStatus>("/api/v1/onboarding/reopen", {});
+export const restartService = () => sendJson<{ status: string }>("/api/v1/system/restart", {});
+export const getWorkspaceStatus = () => getJson<WorkspaceStatus>("/api/v1/workspace");
+export const validateWorkspace = (parent_directory: string) =>
+  sendJson<WorkspaceValidation>("/api/v1/workspace/validate", { parent_directory });
+export const pickWorkspaceDirectory = (initial_directory?: string) =>
+  sendJson<WorkspaceDirectorySelection>("/api/v1/workspace/pick-directory", {
+    initial_directory: initial_directory || null,
+  });
+export const createWorkspace = (parent_directory: string, name: string) =>
+  sendJson<{ workspace_path: string; manifest: WorkspaceStatus["manifest"]; restart_required: boolean }>(
+    "/api/v1/workspace", { parent_directory, name },
+  );
+export const exportPortableWorkspace = (include_secrets: boolean, passphrase?: string) =>
+  sendJson<PortableWorkspaceExport>("/api/v1/workspace/portable-export", {
+    include_secrets, passphrase: passphrase || null,
+  });
+export const importPortableWorkspace = (
+  file: File, parentDirectory: string, passphrase?: string,
+) => {
+  const body = new FormData();
+  body.append("file", file); body.append("parent_directory", parentDirectory);
+  if (passphrase) body.append("passphrase", passphrase);
+  return sendForm<PortableWorkspaceImport>("/api/v1/workspace/portable-import", body);
+};
+export const getConfiguration = () =>
+  getJson<ConfigurationStatus>("/api/v1/configuration");
+export const updateConfiguration = (
+  expected_revision: number, configuration: CareerConsoleConfiguration, reason: string,
+) => putJson<ConfigurationStatus>("/api/v1/configuration", {
+  expected_revision, configuration, reason,
+});
+export const getConfigurationChanges = () =>
+  getJson<{ items: ConfigurationChange[]; total: number }>("/api/v1/configuration/changes");
+export const getProviderCatalog = () =>
+  getJson<{ items: ProviderCatalogItem[]; total: number }>("/api/v1/configuration/provider-catalog");
+export const getProviders = () =>
+  getJson<{ items: ProviderView[]; total: number }>("/api/v1/configuration/providers");
+export const upsertProvider = (providerId: string, body: {
+  expected_revision: number; provider_type: ProviderType; display_name: string;
+  enabled: boolean; api_base: string | null; default_model: string;
+  models: string[]; api_key?: string;
+}) => putJson<{ provider: ProviderView; configuration_revision: number; restart_required: boolean }>(
+  `/api/v1/configuration/providers/${encodeURIComponent(providerId)}`, body,
+);
+export const deleteProvider = (providerId: string, expectedRevision: number) =>
+  deleteJson<{ deleted: boolean; configuration_revision: number }>(
+    `/api/v1/configuration/providers/${encodeURIComponent(providerId)}?expected_revision=${expectedRevision}`,
+  );
+export const updateAgentConfiguration = (expected_revision: number, agents: AgentConfiguration) =>
+  putJson<ConfigurationStatus>("/api/v1/configuration/agents", { expected_revision, agents });
+export const testProvider = (providerId: string, model?: string) =>
+  sendJson<ProviderTestRun>(`/api/v1/configuration/providers/${encodeURIComponent(providerId)}/test`, { model: model || null });
+export const getProviderTests = () =>
+  getJson<{ items: ProviderTestRun[]; total: number }>("/api/v1/configuration/provider-tests");
+export const getQQChannel = () => getJson<QQChannelView>("/api/v1/channels/qq");
+export const configureQQChannel = (body: Omit<QQChannelView, "has_secret" | "configuration_revision"> & {
+  expected_revision: number; secret?: string;
+}) => putJson<QQChannelView>("/api/v1/channels/qq", body);
+export const deleteQQChannel = (revision: number) =>
+  deleteJson<{ deleted: boolean }>(`/api/v1/channels/qq?expected_revision=${revision}`);
+export const testQQChannel = () => sendJson<ChannelDeliveryRun>("/api/v1/channels/qq/test", {});
+export const getChannelDeliveries = () =>
+  getJson<{ items: ChannelDeliveryRun[]; total: number }>("/api/v1/channels/deliveries");
+export const configureScheduler = (expected_revision: number, scheduler: CareerConsoleConfiguration["scheduler"]) =>
+  putJson<CareerConsoleConfiguration["scheduler"] & { configuration_revision: number }>(
+    "/api/v1/scheduler/configuration", { expected_revision, scheduler },
+  );
+export const getSchedulerRuns = () =>
+  getJson<{ items: SchedulerRun[]; total: number }>("/api/v1/scheduler/runs");
 export const getBackgroundJobs = () => getJson<BackgroundJobList>("/api/v1/jobs");
 export const retryBackgroundJob = (id: string) => sendJson<BackgroundJob>(`/api/v1/jobs/${id}/retry`, {});
 export const cancelBackgroundJob = (id: string) => sendJson<BackgroundJob>(`/api/v1/jobs/${id}/cancel`, {});
 export const getBossConnector = () => getJson<BossConnector>("/api/v1/connectors/boss");
+export const getOpenCliConfiguration = () => getJson<{ executable: string | null; resolved_executable: string | null; installed: boolean }>("/api/v1/connectors/opencli");
+export const configureOpenCli = (executable: string | null) => putJson<{ executable: string | null; resolved_executable: string | null; installed: boolean }>("/api/v1/connectors/opencli", { executable });
 export const configureBossConnector = (body: BossConnectorUpdate) => putJson<BossConnector>("/api/v1/connectors/boss", body);
 export const checkBossConnector = () => sendJson<{ status: string; opencli_version?: string; error_code?: string }>("/api/v1/connectors/boss/health", {});
 export const loginBossConnector = () => sendJson<Record<string, unknown>>("/api/v1/connectors/boss/login", { timeout: 300 });

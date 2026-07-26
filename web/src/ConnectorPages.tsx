@@ -36,7 +36,7 @@ const nowcoderInitial: NowcoderConnectorUpdate = {
   schedule_times: ["09:00"],
 };
 
-export function DataSourcesPage() {
+export function DataSourcesPage({ setupOnly = false }: { setupOnly?: boolean }) {
   const client = useQueryClient();
   const query = useQuery({ queryKey: ["boss-connector"], queryFn: getBossConnector });
   const nowcoder = useQuery({ queryKey: ["nowcoder-connector"], queryFn: getNowcoderConnector });
@@ -100,7 +100,8 @@ export function DataSourcesPage() {
         <button type="button" onClick={() => scanNowcoder.mutate(lookback)} disabled={scanNowcoder.isPending || !nowcoderForm.enabled}>主动获取</button>
       </div>
     </section>
-    <section className="panel table-wrap"><div className="panel-heading"><div><p className="eyebrow">NOWCODER SYNC HISTORY</p><h2>牛客同步记录</h2></div></div><table><thead><tr><th>时间（北京时间）</th><th>触发</th><th>状态</th><th>发现</th><th>新增 / 更新 / 重复 / 隔离</th></tr></thead><tbody>{nowcoder.data?.runs.map(run => <tr key={run.id}><td>{formatChinaTime(run.started_at)}</td><td>{run.trigger_type}</td><td>{run.status}{run.error_code ? ` · ${run.error_code}` : ""}</td><td>{run.discovered_count}</td><td>{run.created_count} / {run.updated_count} / {run.duplicate_count} / {run.quarantined_count}</td></tr>)}</tbody></table></section>
+    {!setupOnly && <section className="panel table-wrap"><div className="panel-heading"><div><p className="eyebrow">NOWCODER SYNC HISTORY</p><h2>牛客同步记录</h2></div></div><table><thead><tr><th>时间（北京时间）</th><th>触发</th><th>状态</th><th>发现</th><th>新增 / 更新 / 重复 / 隔离</th></tr></thead><tbody>{nowcoder.data?.runs.map(run => <tr key={run.id}><td>{formatChinaTime(run.started_at)}</td><td>{run.trigger_type}</td><td>{run.status}{run.error_code ? ` · ${run.error_code}` : ""}</td><td>{run.discovered_count}</td><td>{run.created_count} / {run.updated_count} / {run.duplicate_count} / {run.quarantined_count}</td></tr>)}</tbody></table></section>}
+    {!setupOnly && <>
     <section className="panel">
       <div className="panel-heading"><div><p className="eyebrow">OPENCLI · BOSS</p><h2>BOSS 直聘</h2></div><span>{query.data?.last_success_at ? `最近成功 ${formatChinaTime(query.data.last_success_at)}（北京时间）` : "尚未同步"}</span></div>
       <form className="form-grid" onSubmit={submit}>
@@ -115,5 +116,6 @@ export function DataSourcesPage() {
     </section>
     <section className="panel table-wrap"><div className="panel-heading"><div><p className="eyebrow">SYNC HISTORY</p><h2>最近同步</h2></div></div><table><thead><tr><th>时间（北京时间）</th><th>触发</th><th>状态</th><th>发现</th><th>新增 / 更新 / 重复 / 隔离</th></tr></thead><tbody>{query.data?.runs.map(run => <tr key={run.id}><td>{formatChinaTime(run.started_at)}</td><td>{run.trigger_type}</td><td>{run.status}{run.error_code ? ` · ${run.error_code}` : ""}</td><td>{run.discovered_count}</td><td>{run.created_count} / {run.updated_count} / {run.duplicate_count} / {run.quarantined_count}</td></tr>)}</tbody></table></section>
     {!!query.data?.quarantine.length && <section className="panel"><div className="panel-heading"><h2>隔离数据</h2><span>不会写入岗位池</span></div>{query.data.quarantine.map(item => <p key={item.id}><code>{item.external_id}</code> · {item.error_code}</p>)}</section>}
+    </>}
   </>;
 }

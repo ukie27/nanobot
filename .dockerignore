@@ -9,5 +9,9 @@ build/
 .env
 .assets
 node_modules/
-bridge/dist/
+**/node_modules/
+integrations/whatsapp-bridge/dist/
+**/dist/
 workspace/
+CareerConsole/
+.uv-cache/

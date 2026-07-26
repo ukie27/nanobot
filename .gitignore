@@ -6,6 +6,7 @@
 *.pyc
 dist/
 build/
+.build-artifacts/
 *.egg-info/
 *.egg
 *.pycs
@@ -20,9 +21,16 @@ venv/
 node_modules/
 .npm-cache/
 .tools/
+.uv-cache/
 __pycache__/
 poetry.lock
 .pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.career-console/
+.careerconsole/
+/CareerConsole/
 botpy.log
 nano.*.save
 .DS_Store

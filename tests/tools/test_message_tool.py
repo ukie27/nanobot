@@ -1,6 +1,6 @@
 import pytest
 
-from nanobot.agent.tools.message import MessageTool
+from career_console.runtime.agent.tools.message import MessageTool
 
 
 @pytest.mark.asyncio

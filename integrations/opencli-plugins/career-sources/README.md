@@ -5,7 +5,7 @@ This project-owned plugin extends the external OpenCLI installation without modi
 Install or relink it once per machine:
 
 ```powershell
-opencli plugin install file:///D:/project/job-agent/nanobot-career/integrations/opencli-plugins/career-sources
+opencli plugin install file:///D:/project/job-agent/CareerConsole/integrations/opencli-plugins/career-sources
 ```
 
 Daily automation is deliberately limited to the current China calendar day:
