@@ -15,9 +15,6 @@ class GovernanceApplicationService:
     def search(self, query: str) -> list[dict[str, Any]]:
         return self.gateway.search(query=query)
 
-    def review_queue(self) -> list[dict[str, Any]]:
-        return self.gateway.review_queue()
-
     def integration_health(self) -> dict[str, Any]:
         return self.gateway.integration_health()
 

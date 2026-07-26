@@ -33,6 +33,7 @@ class OpenCliProcessRunner:
         ("boss", "login"),
         ("boss", "search"),
         ("boss", "detail"),
+        ("nowcoder", "schedule"),
     }
 
     def __init__(self, executable: str | Path | None = None, *, timeout_seconds: int = 45) -> None:
@@ -77,6 +78,24 @@ class OpenCliProcessRunner:
             raise OpenCliError(ConnectorError.INVALID_ARGUMENT, "security_id 无效。")
         return self._object(self._run(profile, "detail", [security_id.strip()]))
 
+    def nowcoder_schedule(
+        self, *, lookback_days: int, limit: int, query: str = ""
+    ) -> list[dict[str, Any]]:
+        args = [
+            "--lookback",
+            str(lookback_days),
+            "--limit",
+            str(max(1, min(limit, 1000))),
+        ]
+        if query.strip():
+            args.extend(["--query", query.strip()])
+        payload = self._run_command("nowcoder", "schedule", args)
+        if not isinstance(payload, list) or not all(isinstance(item, dict) for item in payload):
+            raise OpenCliError(
+                ConnectorError.SCHEMA_INVALID, "OpenCLI 牛客日程输出不是对象数组。"
+            )
+        return payload
+
     def _run(
         self, profile: str, command: str, args: list[str], *, timeout: int | None = None
     ) -> Any:
@@ -85,6 +104,21 @@ class OpenCliProcessRunner:
                 ConnectorError.COMMAND_DENIED, "该 OpenCLI 命令不在只读 allowlist 中。"
             )
         argv = ["--profile", profile, "boss", command, *args, "-f", "json"]
+        return self._execute_json(argv, timeout=timeout or self.timeout_seconds)
+
+    def _run_command(
+        self, site: str, command: str, args: list[str], *, timeout: int | None = None
+    ) -> Any:
+        if (site, command) not in self._ALLOWED:
+            raise OpenCliError(
+                ConnectorError.COMMAND_DENIED, "该 OpenCLI 命令不在只读 allowlist 中。"
+            )
+        return self._execute_json(
+            [site, command, *args, "-f", "json"],
+            timeout=timeout or self.timeout_seconds,
+        )
+
+    def _execute_json(self, argv: list[str], *, timeout: int) -> Any:
         output = self._execute(argv, timeout=timeout or self.timeout_seconds, structured=True)
         try:
             return json.loads(output)
@@ -136,6 +170,18 @@ class OpenCliProcessRunner:
                 raise OpenCliError(ConnectorError.NOT_INSTALLED, "OpenCLI 需要 Node.js。")
             return [node, self.executable]
         if suffix in {".cmd", ".bat"}:
+            powershell_script = path.with_suffix(".ps1")
+            powershell = shutil.which("pwsh.exe") or shutil.which("powershell.exe")
+            if powershell and powershell_script.is_file():
+                return [
+                    powershell,
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-File",
+                    str(powershell_script),
+                ]
             command = shutil.which("cmd.exe") or "cmd.exe"
             return [command, "/d", "/s", "/c", self.executable]
         return [self.executable]

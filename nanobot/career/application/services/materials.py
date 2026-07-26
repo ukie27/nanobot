@@ -37,5 +37,14 @@ class MaterialApplicationService:
     def review(self, material_id: str) -> dict[str, Any]:
         return self.gateway.review_material(material_id)
 
+    def fork_resume(
+        self, material_id: str, *, series_type: str, name: str,
+        parent_resume_id: str | None, direction_label: str | None,
+    ) -> dict[str, Any]:
+        return self.gateway.fork_resume(
+            material_id, series_type=series_type, name=name,
+            parent_resume_id=parent_resume_id, direction_label=direction_label,
+        )
+
     def finalize(self, material_id: str, *, expected_version: int) -> dict[str, Any]:
         return self.gateway.finalize_material(material_id, expected_version=expected_version)

@@ -219,7 +219,7 @@ def test_classifier_and_mime_parser_are_deterministic_and_bounded() -> None:
     assert parsed["attachments"] == [
         {"filename": "invite.pdf", "content_type": "application/pdf", "size_bytes": 14}
     ]
-    assert len(parsed["evidence_excerpt"]) <= 2000
+    assert len(parsed["evidence_excerpt"]) <= 20_000
     assert "not-a-real-pdf" not in parsed["evidence_excerpt"]
 
 
@@ -305,7 +305,7 @@ def test_sync_batch_limit_advances_cursor_only_through_processed_uids(monkeypatc
 
     assert [message["uid"] for message in result["messages"]] == [1, 2]
     assert result["last_uid"] == 2
-    assert len([call for call in fake.calls if call[:2] == ("uid", "fetch")]) == 2
+    assert len([call for call in fake.calls if call[:2] == ("uid", "fetch")]) == 4
 
 
 def test_uidvalidity_change_restarts_with_bounded_date_search(monkeypatch) -> None:
@@ -349,7 +349,7 @@ def test_missing_uidvalidity_is_rejected_before_cursor_can_advance(monkeypatch) 
     assert not any(call[:2] == ("uid", "search") for call in fake.calls)
 
 
-def test_unrelated_mail_body_is_never_fetched_or_persisted(monkeypatch) -> None:
+def test_unrelated_header_does_not_prevent_agent_evidence_fetch(monkeypatch) -> None:
     fake = UnrelatedFakeImap()
     monkeypatch.setattr("imaplib.IMAP4_SSL", lambda host, port, timeout=None: fake)
 
@@ -366,9 +366,9 @@ def test_unrelated_mail_body_is_never_fetched_or_persisted(monkeypatch) -> None:
 
     message = result["messages"][0]
     assert message["classification"] == "unrelated"
-    assert message["body_fetched"] is False
+    assert message["body_fetched"] is True
     assert message["evidence_excerpt"] is None
-    assert len([call for call in fake.calls if call[:2] == ("uid", "fetch")]) == 1
+    assert len([call for call in fake.calls if call[:2] == ("uid", "fetch")]) == 2
 
 
 def test_prompt_injection_text_cannot_expand_readonly_imap_commands(monkeypatch) -> None:

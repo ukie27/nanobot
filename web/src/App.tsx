@@ -5,13 +5,15 @@ import { ApiError, cancelBackgroundJob, getBackgroundJobs, getSystemStatus, retr
 import { ApplicationDetailPage, ApplicationReviewPage, ApplicationsPage } from "./ApplicationPages";
 import { JobDetailPage, JobPoolPage } from "./JobPages";
 import { InterviewCenterPage, InterviewDetailPage } from "./InterviewPages";
-import { MaterialDetailPage, MaterialsPage } from "./MaterialPages";
+import { MaterialDetailPage, MaterialsPage, ResumeDiffPage } from "./MaterialPages";
 import { MessageCenterPage } from "./MailPages";
+import { OpportunityPage } from "./OpportunityPages";
 import { DocumentsPage, ProfilePage, ReviewPage } from "./ProfilePages";
 import { DashboardPage, TasksPage } from "./TaskPages";
 import { formatChinaTime } from "./time";
 import { DataSourcesPage } from "./ConnectorPages";
 import { WorkspacePage } from "./WorkspacePage";
+import { AgentRunsPage, ReviewCenterPage } from "./RuntimePages";
 
 function Brand() {
   return (
@@ -35,15 +37,16 @@ function Layout() {
           <NavLink to="/workspace">全链路工作区</NavLink>
           <NavLink to="/profile">职业档案</NavLink>
           <NavLink to="/documents">简历导入</NavLink>
-          <NavLink to="/review">事实审查</NavLink>
-          <NavLink to="/job-posts">岗位池</NavLink>
+          <NavLink to="/reviews">审查中心</NavLink>
+          <NavLink to="/opportunities">招聘机会</NavLink>
+          <NavLink to="/job-posts">具体岗位</NavLink>
           <NavLink to="/materials">申请材料</NavLink>
           <NavLink to="/applications">申请看板</NavLink>
-          <NavLink to="/application-review">事件审查</NavLink>
           <NavLink to="/tasks">任务日程</NavLink>
           <NavLink to="/data-sources">数据来源</NavLink>
           <NavLink to="/message-center">消息中心</NavLink>
           <NavLink to="/interviews">面试中心</NavLink>
+          <NavLink to="/agent-runs">Agent 运行</NavLink>
           <NavLink to="/status">运行状态</NavLink>
           <NavLink to="/jobs">后台任务</NavLink>
         </nav>
@@ -61,10 +64,13 @@ function Layout() {
           <Route path="/profile" element={<ProfilePage />} />
           <Route path="/documents" element={<DocumentsPage />} />
           <Route path="/review" element={<ReviewPage />} />
+          <Route path="/reviews" element={<ReviewCenterPage />} />
+          <Route path="/opportunities" element={<OpportunityPage />} />
           <Route path="/job-posts" element={<JobPoolPage />} />
           <Route path="/job-posts/:id" element={<JobDetailPage />} />
           <Route path="/materials" element={<MaterialsPage />} />
           <Route path="/materials/:id" element={<MaterialDetailPage />} />
+          <Route path="/resume-diff/:fromVersionId/:toVersionId" element={<ResumeDiffPage />} />
           <Route path="/applications" element={<ApplicationsPage />} />
           <Route path="/applications/:id" element={<ApplicationDetailPage />} />
           <Route path="/application-review" element={<ApplicationReviewPage />} />
@@ -73,6 +79,7 @@ function Layout() {
           <Route path="/message-center" element={<MessageCenterPage />} />
           <Route path="/interviews" element={<InterviewCenterPage />} />
           <Route path="/interviews/:id" element={<InterviewDetailPage />} />
+          <Route path="/agent-runs" element={<AgentRunsPage />} />
           <Route path="/status" element={<StatusPage />} />
           <Route path="/jobs" element={<JobsPage />} />
           <Route path="*" element={<Navigate to="/status" replace />} />

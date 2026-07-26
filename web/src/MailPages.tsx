@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ImapAccountUpdate, configureMailConnector, deleteMailConnector, getApplications,
   getMailConnector, getMailMessages, proposeMailMessage, syncMailConnector, testMailConnector,
+  analyzeMailMessage, resolveMailIntelligenceItem, type MailIntelligenceItem,
 } from "./api";
 import { formatChinaTime } from "./time";
 
@@ -55,7 +56,13 @@ export function MessageCenterPage() {
   const propose = useMutation({ mutationFn: proposeMailMessage, onSuccess: async () => {
     setNotice("已按人工关联生成待确认 Proposal，请前往事件审查核对。"); await refresh();
   } });
-  const error = connector.error || messages.error || applications.error || save.error || test.error || sync.error || remove.error || propose.error;
+  const analyze = useMutation({ mutationFn: analyzeMailMessage, onSuccess: async () => {
+    setNotice("Agent 分析完成，候选事件、日程和注意事项已进入审核中心。"); await refresh();
+  } });
+  const resolve = useMutation({ mutationFn: ({ item, resolution }: { item: MailIntelligenceItem; resolution: "confirmed" | "rejected" }) => resolveMailIntelligenceItem(item, resolution), onSuccess: async () => {
+    setNotice("审核结果已保存；确认的申请事件或日程已写入正式业务记录。"); await refresh();
+  } });
+  const error = connector.error || messages.error || applications.error || save.error || test.error || sync.error || remove.error || propose.error || analyze.error || resolve.error;
   const submit = (event: FormEvent) => {
     event.preventDefault(); save.mutate({ ...form, password: form.password || undefined });
   };
@@ -89,6 +96,8 @@ export function MessageCenterPage() {
           <h2>{message.subject || "（无主题）"}</h2><p className="mail-sender">{message.sender}</p>
           {message.evidence_excerpt && <blockquote>{message.evidence_excerpt}</blockquote>}
           {!!message.attachments.length && <p className="attachment-meta">附件元数据：{message.attachments.map(item => `${item.filename ?? "未命名"} · ${item.content_type} · ${item.size_bytes} B`).join("；")}</p>}
+          {!message.intelligence && message.body_fetched && <button type="button" className="secondary" disabled={analyze.isPending} onClick={() => analyze.mutate(message.id)}>使用本地 Agent 分析</button>}
+          {message.intelligence && <section className="candidate-box mail-intelligence"><div className="panel-heading"><strong>Agent 结构化分析 · {message.intelligence.message_type}</strong><a href="/agent-runs">运行审计</a></div><p>{message.intelligence.summary}</p><p>{message.intelligence.company ?? "公司待确认"} · {message.intelligence.job_title ?? "岗位待确认"}</p><small>应用匹配：{message.intelligence.application_match.reason}（{Math.round(message.intelligence.application_match.confidence * 100)}%）</small>{message.intelligence.application_match.create_record_recommended && !message.intelligence.job_post_id && <a className="download-button" href={`/job-posts?mailAnalysisId=${encodeURIComponent(message.intelligence.id)}&company=${encodeURIComponent(message.intelligence.company ?? "")}&jobTitle=${encodeURIComponent(message.intelligence.job_title ?? "")}`}>导入真实 JD 并建立申请</a>}{message.intelligence.job_post_id && <a href={`/job-posts/${message.intelligence.job_post_id}`}>查看已关联岗位</a>}{message.intelligence.items.map(item => <article key={item.id} className="mail-intelligence-item"><strong>{item.item_type} · {item.title}</strong>{(item.scheduled_at || item.occurred_at) && <time>{formatChinaTime(item.scheduled_at || item.occurred_at!)}（北京时间）</time>}<p>{item.details}</p><blockquote>{item.evidence}</blockquote>{item.status === "pending" ? <div className="form-actions"><button type="button" onClick={() => resolve.mutate({ item, resolution: "confirmed" })}>确认</button><button type="button" className="secondary" onClick={() => resolve.mutate({ item, resolution: "rejected" })}>拒绝</button></div> : <span className={`health-pill ${item.status === "confirmed" ? "ok" : ""}`}>{item.status === "confirmed" ? "已确认" : "已拒绝"}</span>}</article>)}</section>}
           {message.candidate && <div className="candidate-box"><strong>{message.candidate.status === "proposal_created" ? "已创建待确认 Proposal" : "需要人工关联"}</strong><p>{message.candidate.match_reason}</p>{message.candidate.proposal_id ? <a href="/application-review">前往事件审查确认</a> : <div className="manual-match"><select aria-label={`为 ${message.subject} 选择申请`} value={selectedApplications[message.id] ?? ""} onChange={event => setSelectedApplications(current => ({ ...current, [message.id]: event.target.value }))}><option value="">选择现有申请</option>{applications.data?.items.map(item => <option value={item.id} key={item.id}>{item.company} · {item.job_title}</option>)}</select><button type="button" disabled={!selectedApplications[message.id] || propose.isPending} onClick={() => propose.mutate({ message_id: message.id, application_id: selectedApplications[message.id] })}>生成待确认 Proposal</button></div>}</div>}
         </article>)}
       </div>

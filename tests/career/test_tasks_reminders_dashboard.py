@@ -179,8 +179,8 @@ def test_upgrade_from_part4_creates_backup_and_scheduler_schema(tmp_path: Path) 
     assert database_revision(settings.database_path) == "20260724_0005"
     with TestClient(create_app(settings)) as client:
         assert client.get("/health/ready").status_code == 200
-    assert database_revision(settings.database_path) == "20260724_0010"
-    assert list(settings.backups_dir.glob("*pre-202607240010.sqlite3"))
+    assert database_revision(settings.database_path) == "20260726_0021"
+    assert list(settings.backups_dir.glob("*pre-202607260021.sqlite3"))
     with sqlite3.connect(settings.database_path) as connection:
         tables = {
             row[0]

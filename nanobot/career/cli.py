@@ -115,6 +115,7 @@ def doctor(
     settings = _settings(data_dir)
     checks: list[tuple[str, str, str, bool]] = []
     connector_required = False
+    nowcoder_required = False
     checks.append(("Python", sys.version.split()[0], ">= 3.11", sys.version_info >= (3, 11)))
 
     try:
@@ -177,6 +178,10 @@ def doctor(
                         ConnectorConfigModel, "00000000-0000-0000-0000-000000000006"
                     )
                     connector_required = bool(connector and connector.enabled)
+                    nowcoder = session.get(
+                        ConnectorConfigModel, "00000000-0000-0000-0000-000000000007"
+                    )
+                    nowcoder_required = bool(nowcoder and nowcoder.enabled)
             database.close()
         except Exception as exc:
             checks.append(("Database", type(exc).__name__, "healthy", False))
@@ -198,8 +203,8 @@ def doctor(
         (
             "Node.js",
             node_version,
-            ">= 20 when BOSS Connector enabled",
-            node_ok or not connector_required,
+            ">= 20 when an OpenCLI Connector is enabled",
+            node_ok or not (connector_required or nowcoder_required),
         )
     )
     runner = OpenCliProcessRunner(settings.opencli_executable)
@@ -215,10 +220,16 @@ def doctor(
         (
             "OpenCLI",
             opencli_version,
-            "available when BOSS Connector enabled",
-            opencli_ok or not connector_required,
+            "available when an OpenCLI Connector is enabled",
+            opencli_ok or not (connector_required or nowcoder_required),
         )
     )
+    if nowcoder_required and opencli_ok:
+        try:
+            runner.nowcoder_schedule(lookback_days=0, limit=1)
+            checks.append(("Nowcoder plugin", "schedule available", "read-only command", True))
+        except OpenCliError as exc:
+            checks.append(("Nowcoder plugin", exc.code, "read-only command", False))
     checks.append(("Web port", str(settings.port), "available", _port_available(settings.port)))
 
     table = Table(title="Nanobot Career doctor")
@@ -232,7 +243,7 @@ def doctor(
         )
     console.print(table)
     console.print(
-        "[dim]OpenCLI is consumed as an external application; this project does not develop it.[/dim]"
+        "[dim]OpenCLI remains external; Career-owned site commands are loaded as local plugins.[/dim]"
     )
     if not all(item[3] for item in checks):
         raise typer.Exit(1)

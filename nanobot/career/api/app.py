@@ -27,7 +27,10 @@ from nanobot.career.api.routes import (
     jobs,
     mail,
     materials,
+    opportunities,
     profile,
+    profile_memory,
+    runtime,
     system,
     tasks,
 )
@@ -37,9 +40,17 @@ from nanobot.career.application.services import (
     GovernanceApplicationService,
     InterviewApplicationService,
     JobApplicationService,
+    JobFitApplicationService,
     MailApplicationService,
+    MaterialAgentApplicationService,
     MaterialApplicationService,
+    NowcoderConnectorApplicationService,
+    OpportunityApplicationService,
     ProfileApplicationService,
+    ProfileImpactApplicationService,
+    ProfileMemoryApplicationService,
+    ResumeDirectionApplicationService,
+    RuntimeApplicationService,
     TaskApplicationService,
 )
 from nanobot.career.infrastructure.connectors import OpenCliProcessRunner
@@ -51,11 +62,28 @@ from nanobot.career.infrastructure.database.backup import backup_database, datab
 from nanobot.career.infrastructure.database.connector_gateway import SqlAlchemyConnectorGateway
 from nanobot.career.infrastructure.database.governance_gateway import SqlAlchemyGovernanceGateway
 from nanobot.career.infrastructure.database.interview_gateway import SqlAlchemyInterviewGateway
+from nanobot.career.infrastructure.database.job_fit_gateway import SqlAlchemyJobFitGateway
 from nanobot.career.infrastructure.database.job_gateway import SqlAlchemyJobGateway
 from nanobot.career.infrastructure.database.mail_gateway import SqlAlchemyMailGateway
+from nanobot.career.infrastructure.database.material_agent_gateway import (
+    SqlAlchemyMaterialAgentGateway,
+)
 from nanobot.career.infrastructure.database.material_gateway import SqlAlchemyMaterialGateway
 from nanobot.career.infrastructure.database.migrations import head_revision, upgrade_to_head
+from nanobot.career.infrastructure.database.opportunity_gateway import (
+    SqlAlchemyOpportunityGateway,
+)
 from nanobot.career.infrastructure.database.profile_gateway import SqlAlchemyProfileGateway
+from nanobot.career.infrastructure.database.profile_impact_gateway import (
+    SqlAlchemyProfileImpactGateway,
+)
+from nanobot.career.infrastructure.database.profile_memory_gateway import (
+    SqlAlchemyProfileMemoryGateway,
+)
+from nanobot.career.infrastructure.database.resume_direction_gateway import (
+    SqlAlchemyResumeDirectionGateway,
+)
+from nanobot.career.infrastructure.database.runtime_gateway import SqlAlchemyRuntimeGateway
 from nanobot.career.infrastructure.database.task_gateway import SqlAlchemyTaskGateway
 from nanobot.career.infrastructure.extraction import LocalJobExtractor, LocalResumeFactExtractor
 from nanobot.career.infrastructure.files import DocumentParser, LocalBlobStore, SafeJobPageFetcher
@@ -93,10 +121,22 @@ def create_app(settings: CareerSettings | None = None) -> FastAPI:
             extractor=LocalJobExtractor(),
             parser=DocumentParser(max_bytes=settings.max_document_bytes),
         )
+        job_fit_service = JobFitApplicationService(
+            SqlAlchemyJobFitGateway(database.session_factory), _create_job_fit_analyzer(settings)
+        )
+        resume_direction_service = ResumeDirectionApplicationService(
+            SqlAlchemyResumeDirectionGateway(database.session_factory),
+            _create_resume_direction_analyzer(settings),
+        )
         material_gateway = SqlAlchemyMaterialGateway(
             database.session_factory,
             exports_dir=settings.exports_dir,
             pdf_exporter=VerifiedPdfExporter(),
+        )
+        material_drafter, material_reviewer = _create_material_agents(settings)
+        material_agent_service = MaterialAgentApplicationService(
+            SqlAlchemyMaterialAgentGateway(database.session_factory),
+            material_drafter, material_reviewer,
         )
         application_gateway = SqlAlchemyApplicationGateway(database.session_factory)
         task_gateway = SqlAlchemyTaskGateway(database.session_factory)
@@ -107,16 +147,35 @@ def create_app(settings: CareerSettings | None = None) -> FastAPI:
             jobs=job_service,
         )
         connector_gateway.get_or_create_boss()
+        opportunity_gateway = SqlAlchemyOpportunityGateway(database.session_factory)
+        opportunity_service = OpportunityApplicationService(opportunity_gateway)
+        nowcoder_connector_service = NowcoderConnectorApplicationService(
+            gateway=connector_gateway,
+            runner=connector_service.runner,
+            opportunities=opportunity_gateway,
+        )
+        connector_gateway.get_or_create_nowcoder()
         mail_gateway = SqlAlchemyMailGateway(database.session_factory)
         mail_service = MailApplicationService(
             gateway=mail_gateway,
             client=StdlibReadOnlyImapClient(),
             secrets=KeyringSecretStore(),
             applications=application_gateway,
+            tasks=task_gateway,
+            jobs=jobs_service,
+            analyzer=_create_mail_analyzer(settings),
         )
         interview_gateway = SqlAlchemyInterviewGateway(database.session_factory)
         governance_gateway = SqlAlchemyGovernanceGateway(
             database.session_factory, settings=settings, secrets=KeyringSecretStore()
+        )
+        runtime_gateway = SqlAlchemyRuntimeGateway(database.session_factory)
+        profile_memory_gateway = SqlAlchemyProfileMemoryGateway(database.session_factory)
+        profile_memory_service = ProfileMemoryApplicationService(
+            profile_memory_gateway, _create_profile_insight_analyzer(settings)
+        )
+        profile_impact_service = ProfileImpactApplicationService(
+            SqlAlchemyProfileImpactGateway(database.session_factory), jobs_service, job_gateway
         )
         app.state.settings = settings
         app.state.database = database
@@ -124,26 +183,45 @@ def create_app(settings: CareerSettings | None = None) -> FastAPI:
         app.state.profile_service = profile_service
         app.state.job_gateway = job_gateway
         app.state.job_service = job_service
+        app.state.job_fit_service = job_fit_service
+        app.state.resume_direction_service = resume_direction_service
         app.state.job_fetcher = SafeJobPageFetcher(max_bytes=settings.max_document_bytes)
         app.state.material_gateway = material_gateway
         app.state.material_service = MaterialApplicationService(material_gateway)
+        app.state.material_agent_service = material_agent_service
         app.state.application_gateway = application_gateway
         app.state.application_service = CareerApplicationService(application_gateway)
         app.state.task_gateway = task_gateway
         app.state.task_service = TaskApplicationService(task_gateway)
         app.state.connector_gateway = connector_gateway
         app.state.connector_service = connector_service
+        app.state.nowcoder_connector_service = nowcoder_connector_service
+        app.state.opportunity_gateway = opportunity_gateway
+        app.state.opportunity_service = opportunity_service
         app.state.mail_gateway = mail_gateway
         app.state.mail_service = mail_service
         app.state.interview_gateway = interview_gateway
         app.state.interview_service = InterviewApplicationService(interview_gateway)
         app.state.governance_gateway = governance_gateway
         app.state.governance_service = GovernanceApplicationService(governance_gateway)
+        app.state.runtime_gateway = runtime_gateway
+        app.state.runtime_service = RuntimeApplicationService(runtime_gateway)
+        app.state.profile_memory_gateway = profile_memory_gateway
+        app.state.profile_memory_service = profile_memory_service
+        app.state.profile_impact_service = profile_impact_service
         app.state.recovered_jobs = jobs_service.recover_expired_leases()
         app.state.scheduler_startup = task_gateway.run_due()
         scheduler_stop = asyncio.Event()
         scheduler_task = asyncio.create_task(
-            _scheduler_loop(app.state.task_service, connector_service, mail_service, scheduler_stop)
+            _scheduler_loop(
+                app.state.task_service,
+                connector_service,
+                nowcoder_connector_service,
+                mail_service,
+                profile_memory_gateway,
+                profile_impact_service,
+                scheduler_stop,
+            )
         )
         try:
             yield
@@ -188,7 +266,9 @@ def create_app(settings: CareerSettings | None = None) -> FastAPI:
     app.include_router(system.router)
     app.include_router(jobs.router)
     app.include_router(profile.router)
+    app.include_router(profile_memory.router)
     app.include_router(job_pool.router)
+    app.include_router(opportunities.router)
     app.include_router(materials.router)
     app.include_router(materials.resume_router)
     app.include_router(materials.export_router)
@@ -205,6 +285,7 @@ def create_app(settings: CareerSettings | None = None) -> FastAPI:
     app.include_router(interviews.feedback_router)
     app.include_router(interviews.improvement_router)
     app.include_router(governance.router)
+    app.include_router(runtime.router)
     app.include_router(mail.router)
 
     if settings.web_dist_dir.is_dir():
@@ -244,8 +325,90 @@ def _create_fact_extractor(settings: CareerSettings):
     return NanobotProfileFactExtractor(provider, model=config.agents.defaults.model)
 
 
+def _create_mail_analyzer(settings: CareerSettings):
+    if settings.mail_intelligence_mode == "disabled":
+        return None
+    try:
+        from nanobot.career.agent import NanobotMailIntelligenceAnalyzer
+        from nanobot.config.loader import load_config
+        from nanobot.nanobot import _make_provider
+
+        config = load_config()
+        provider = _make_provider(config)
+        return NanobotMailIntelligenceAnalyzer(provider, model=config.agents.defaults.model)
+    except (RuntimeError, ValueError):
+        return None
+
+
+def _create_profile_insight_analyzer(settings: CareerSettings):
+    if settings.profile_insight_mode == "disabled":
+        return None
+    try:
+        from nanobot.career.agent import NanobotProfileInsightAnalyzer
+        from nanobot.config.loader import load_config
+        from nanobot.nanobot import _make_provider
+
+        config = load_config()
+        provider = _make_provider(config)
+        return NanobotProfileInsightAnalyzer(provider, model=config.agents.defaults.model)
+    except (RuntimeError, ValueError):
+        return None
+
+
+def _create_job_fit_analyzer(settings: CareerSettings):
+    if settings.job_fit_agent_mode == "disabled":
+        return None
+    try:
+        from nanobot.career.agent import NanobotJobFitAnalyzer
+        from nanobot.config.loader import load_config
+        from nanobot.nanobot import _make_provider
+
+        config = load_config()
+        provider = _make_provider(config)
+        return NanobotJobFitAnalyzer(provider, model=config.agents.defaults.model)
+    except (RuntimeError, ValueError):
+        return None
+
+
+def _create_resume_direction_analyzer(settings: CareerSettings):
+    if settings.resume_direction_mode == "disabled":
+        return None
+    try:
+        from nanobot.career.agent import NanobotResumeDirectionAnalyzer
+        from nanobot.config.loader import load_config
+        from nanobot.nanobot import _make_provider
+
+        config = load_config()
+        provider = _make_provider(config)
+        return NanobotResumeDirectionAnalyzer(provider, model=config.agents.defaults.model)
+    except (RuntimeError, ValueError):
+        return None
+
+
+def _create_material_agents(settings: CareerSettings):
+    if settings.material_agent_mode == "disabled":
+        return None, None
+    try:
+        from nanobot.career.agent import NanobotMaterialReviewer, NanobotResumeDrafter
+        from nanobot.config.loader import load_config
+        from nanobot.nanobot import _make_provider
+
+        config = load_config()
+        provider = _make_provider(config)
+        model = config.agents.defaults.model
+        return NanobotResumeDrafter(provider, model=model), NanobotMaterialReviewer(provider, model=model)
+    except (RuntimeError, ValueError):
+        return None, None
+
+
 async def _scheduler_loop(
-    task_service: Any, connector_service: Any, mail_service: Any, stop: asyncio.Event
+    task_service: Any,
+    connector_service: Any,
+    nowcoder_connector_service: Any,
+    mail_service: Any,
+    profile_memory_gateway: Any,
+    profile_impact_service: Any,
+    stop: asyncio.Event,
 ) -> None:
     """Run persisted schedules while the local application is alive."""
     while not stop.is_set():
@@ -256,9 +419,31 @@ async def _scheduler_loop(
             # Connector failures are persisted on SyncRun and must not stop reminders.
             pass
         try:
+            # The service itself hard-codes the scheduled scope to China-calendar today.
+            await asyncio.to_thread(nowcoder_connector_service.run_due)
+        except Exception:
+            pass
+        try:
             await asyncio.to_thread(mail_service.run_due)
         except Exception:
             # Mail failures are persisted and isolated from all other schedules.
+            pass
+        for _ in range(10):
+            processed = await asyncio.to_thread(mail_service.process_next_analysis_job)
+            if not processed:
+                break
+        try:
+            await asyncio.to_thread(profile_memory_gateway.run_due)
+        except Exception:
+            pass
+        try:
+            await asyncio.to_thread(profile_impact_service.enqueue_pending)
+            for _ in range(20):
+                processed = await asyncio.to_thread(profile_impact_service.process_next)
+                if not processed:
+                    break
+        except Exception:
+            # Every impact and queue attempt is durable; one failure must not stop schedules.
             pass
         try:
             await asyncio.wait_for(stop.wait(), timeout=60)

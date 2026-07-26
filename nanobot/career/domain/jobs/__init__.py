@@ -9,11 +9,14 @@ from .entities import (
     RequirementLevel,
     evaluate_match,
 )
+from .intelligence import JobFitAnalysisResult, JobRequirementAssessment
 
 __all__ = [
     "CandidateEvidence",
     "EvidenceDecision",
     "JobRequirement",
+    "JobFitAnalysisResult",
+    "JobRequirementAssessment",
     "MatchResult",
     "RequirementCategory",
     "RequirementLevel",

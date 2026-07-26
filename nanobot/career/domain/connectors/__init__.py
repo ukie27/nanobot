@@ -3,6 +3,8 @@ from nanobot.career.domain.connectors.entities import (
     ConnectorHealth,
     boss_external_id,
     next_scan_time,
+    nowcoder_external_id,
+    validate_nowcoder_lookback,
     validate_profile_alias,
     validate_schedule_times,
 )
@@ -12,6 +14,8 @@ __all__ = [
     "ConnectorHealth",
     "boss_external_id",
     "next_scan_time",
+    "nowcoder_external_id",
+    "validate_nowcoder_lookback",
     "validate_profile_alias",
     "validate_schedule_times",
 ]

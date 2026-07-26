@@ -36,6 +36,10 @@ from nanobot.career.infrastructure.database.profile_gateway import (
     EntityNotFoundError,
     VersionConflictError,
 )
+from nanobot.career.infrastructure.database.review_runtime import (
+    ensure_review_task,
+    set_review_resolution,
+)
 
 _ROUND_QUESTIONS = {
     "phone": ["请简要介绍与岗位最相关的经历。", "为什么选择这个岗位和公司？"],
@@ -282,12 +286,12 @@ class SqlAlchemyInterviewGateway:
                 )
             )
             if task is not None:
-                task.status = "resolved"
-                task.version += 1
-                task.resolution = values["resolution"]
-                task.resolution_reason = values["reason"][:500]
-                task.resolved_by = "user"
-                task.resolved_at = now
+                set_review_resolution(
+                    task,
+                    now=now,
+                    resolution=values["resolution"],
+                    reason=values["reason"],
+                )
             if values["resolution"] == "confirmed":
                 existing = session.scalar(
                     select(ImprovementItemModel).where(
@@ -415,11 +419,18 @@ class SqlAlchemyInterviewGateway:
 
     @staticmethod
     def _add_review_task(session, feedback_id: str, now: datetime) -> None:
-        session.add(ReviewTaskModel(
-            id=str(uuid4()), task_type="interview_feedback", entity_type="interview_feedback",
-            entity_id=feedback_id, status="open", version=1, created_at=now, resolved_at=None,
-            resolution=None, resolution_reason=None, resolved_by=None,
-        ))
+        feedback = session.get(InterviewFeedbackModel, feedback_id)
+        ensure_review_task(
+            session,
+            task_type="interview_feedback",
+            entity_type="interview_feedback",
+            entity_id=feedback_id,
+            title="确认面试改进建议",
+            summary=feedback.description if feedback else "面试反馈待确认",
+            source_type="interview_record",
+            priority=20,
+            now=now,
+        )
 
     def _view(self, session: Session, interview: InterviewModel) -> dict[str, Any]:
         application = session.get(ApplicationModel, interview.application_id)

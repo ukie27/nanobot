@@ -1,0 +1,6 @@
+{
+  "name": "career-sources",
+  "version": "0.1.0",
+  "opencli": ">=1.8.6",
+  "description": "Read-only recruitment source commands maintained by nanobot-career"
+}

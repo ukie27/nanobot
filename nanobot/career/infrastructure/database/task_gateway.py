@@ -66,9 +66,16 @@ class SqlAlchemyTaskGateway:
         priority: int = 0,
         application_id: str | None = None,
         job_post_id: str | None = None,
+        source_key: str | None = None,
     ) -> dict[str, Any]:
         now = datetime.now(UTC)
         with self._session_factory() as session:
+            if source_key:
+                existing = session.scalar(select(CareerTaskModel).where(
+                    CareerTaskModel.source_key == source_key
+                ))
+                if existing is not None:
+                    return self._task_view(session, existing)
             normalized_title = title.strip()
             if not normalized_title:
                 raise CareerDomainError("Task title cannot be empty.", code="empty_task_title")
@@ -85,7 +92,7 @@ class SqlAlchemyTaskGateway:
                 application_id=application_id,
                 job_post_id=job_post_id,
                 source_event_id=None,
-                source_key=None,
+                source_key=source_key,
                 task_type=task_type,
                 title=normalized_title[:300],
                 notes=notes.strip(),

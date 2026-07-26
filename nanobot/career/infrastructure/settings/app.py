@@ -29,6 +29,11 @@ class CareerSettings(BaseSettings):
     agent_trace_retention_days: int = Field(default=30, ge=1, le=3650)
     max_document_bytes: int = Field(default=10 * 1024 * 1024, ge=1024, le=50 * 1024 * 1024)
     fact_extractor_mode: Literal["local", "agent"] = "local"
+    mail_intelligence_mode: Literal["disabled", "agent"] = "agent"
+    profile_insight_mode: Literal["disabled", "agent"] = "agent"
+    job_fit_agent_mode: Literal["disabled", "agent"] = "agent"
+    resume_direction_mode: Literal["disabled", "agent"] = "agent"
+    material_agent_mode: Literal["disabled", "agent"] = "agent"
     opencli_executable: Path | None = None
 
     @field_validator("data_dir", mode="before")

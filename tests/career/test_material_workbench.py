@@ -54,6 +54,49 @@ def _edit_payload(material: dict, transform=None) -> dict:
     return {"expected_version": material["version"], "blocks": blocks}
 
 
+def test_profile_change_recomputes_job_fit_and_invalidates_material_strategy(
+    tmp_path: Path,
+) -> None:
+    settings = CareerSettings(
+        data_dir=tmp_path / "career", mail_intelligence_mode="disabled",
+        profile_insight_mode="disabled",
+    )
+    with TestClient(create_app(settings)) as client:
+        skill = _fact(client, "skill", "technical_skills", "Python、SQL、Docker")
+        _fact(client, "education", "degree", "计算机科学本科学历")
+        job = _job(client)
+        material_response = client.post(
+            "/api/v1/materials",
+            json={"job_post_id": job["id"], "material_type": "resume", "name": "基础简历"},
+        )
+        assert material_response.status_code == 201, material_response.text
+        material = material_response.json()
+        assert material["strategy_stale"] is False
+
+        edited_fact = client.post(
+            f"/api/v1/facts/{skill['id']}/edit",
+            json={
+                "expected_version": skill["version"], "value": "Python、SQL",
+                "reason": "档案证据发生变化",
+            },
+        )
+        assert edited_fact.status_code == 200, edited_fact.text
+        impact = client.post("/api/v1/profile-memory/impacts/run")
+        assert impact.status_code == 200, impact.text
+
+        refreshed_job = client.get(f"/api/v1/job-posts/{job['id']}").json()
+        assert len(refreshed_job["analyses"]) == 2
+        stale = client.get(f"/api/v1/materials/{material['id']}").json()
+        assert stale["strategy_stale"] is True
+        assert "基础档案变化" in stale["strategy_stale_reason"]
+
+        saved = client.post(
+            f"/api/v1/materials/{material['id']}/versions", json=_edit_payload(stale)
+        )
+        assert saved.status_code == 201, saved.text
+        assert saved.json()["strategy_stale"] is False
+
+
 def test_drafter_reviewer_version_chain_and_verified_pdf(tmp_path: Path) -> None:
     settings = CareerSettings(data_dir=tmp_path / "career")
     with TestClient(create_app(settings)) as client:
@@ -82,15 +125,13 @@ def test_drafter_reviewer_version_chain_and_verified_pdf(tmp_path: Path) -> None
 
         series = client.get("/api/v1/resumes")
         assert series.status_code == 200
-        assert series.json()["items"] == [
-            {
-                "id": resume_id,
-                "name": "后端方向基础简历",
-                "material_count": 1,
-                "created_at": series.json()["items"][0]["created_at"],
-                "updated_at": series.json()["items"][0]["updated_at"],
-            }
-        ]
+        resume_series = series.json()["items"][0]
+        assert resume_series["id"] == resume_id
+        assert resume_series["name"] == "后端方向基础简历"
+        assert resume_series["series_type"] == "base"
+        assert resume_series["parent_resume_id"] is None
+        assert resume_series["material_count"] == 1
+        assert resume_series["latest_version"]["version_scope"] == "job_tailored"
         reused = client.post(
             "/api/v1/materials",
             json={
@@ -215,6 +256,61 @@ def test_drafter_reviewer_version_chain_and_verified_pdf(tmp_path: Path) -> None
         assert "熟练使用 Python、SQL 和 Docker" in old_values
 
 
+def test_base_direction_job_tailored_lineage_and_diff(tmp_path: Path) -> None:
+    settings = CareerSettings(
+        data_dir=tmp_path / "career", mail_intelligence_mode="disabled",
+        profile_insight_mode="disabled", material_agent_mode="disabled",
+    )
+    with TestClient(create_app(settings)) as client:
+        _fact(client, "skill", "technical_skills", "Python、SQL、FastAPI")
+        job = _job(client)
+        first = client.post("/api/v1/materials", json={
+            "job_post_id": job["id"], "material_type": "resume", "name": "临时材料系列",
+        }).json()
+
+        base_response = client.post("/api/v1/resumes/from-material", json={
+            "material_id": first["id"], "series_type": "base", "name": "通用基础简历",
+        })
+        assert base_response.status_code == 201, base_response.text
+        base = base_response.json()
+        assert base["series_type"] == "base"
+        assert base["latest_version"]["version_scope"] == "base"
+
+        direction_response = client.post("/api/v1/resumes/from-material", json={
+            "material_id": first["id"], "series_type": "direction", "name": "后端方向简历",
+            "parent_resume_id": base["id"], "direction_label": "后端工程",
+        })
+        assert direction_response.status_code == 201, direction_response.text
+        direction = direction_response.json()
+        assert direction["parent_resume_id"] == base["id"]
+        assert direction["latest_version"]["source_resume_version_id"] == base["latest_version"]["id"]
+
+        tailored_response = client.post("/api/v1/materials", json={
+            "job_post_id": job["id"], "material_type": "resume", "name": "",
+            "resume_id": direction["id"],
+        })
+        assert tailored_response.status_code == 201, tailored_response.text
+        tailored = tailored_response.json()
+        assert tailored["resume_series_type"] == "direction"
+        assert tailored["source_resume_version_id"] == direction["latest_version"]["id"]
+        edited_response = client.post(
+            f"/api/v1/materials/{tailored['id']}/versions",
+            json=_edit_payload(
+                tailored,
+                lambda index, block: f"重点经历：{block['text']}" if index == 0 else block["text"],
+            ),
+        )
+        assert edited_response.status_code == 201, edited_response.text
+        edited = edited_response.json()
+        diff = client.get(
+            f"/api/v1/resumes/versions/{direction['latest_version']['id']}/diff/"
+            f"{edited['current_version']['id']}"
+        )
+        assert diff.status_code == 200, diff.text
+        result = diff.json()
+        assert result["summary"]["changed"] >= 1
+        assert any(item["change"] == "changed" for item in result["blocks"])
+        assert result["fact_changes"] == {"added_fact_ids": [], "removed_fact_ids": []}
 def test_cover_letter_and_introduction_use_fact_bound_blocks(tmp_path: Path) -> None:
     settings = CareerSettings(data_dir=tmp_path / "career")
     with TestClient(create_app(settings)) as client:

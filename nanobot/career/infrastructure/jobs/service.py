@@ -28,6 +28,7 @@ class BackgroundJobView:
     started_at: datetime | None
     finished_at: datetime | None
     last_error_code: str | None
+    payload: dict[str, Any]
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -113,19 +114,21 @@ class BackgroundJobService:
             return int(result.rowcount or 0)
 
     def claim_next(
-        self, worker_id: str, *, lease_seconds: int = 60, now: datetime | None = None
+        self, worker_id: str, *, lease_seconds: int = 60, now: datetime | None = None,
+        job_types: set[str] | None = None,
     ) -> BackgroundJobView | None:
         now = now or datetime.now(UTC)
         with self._session_factory() as session:
-            row = session.scalar(
-                select(BackgroundJobModel)
-                .where(
+            statement = select(BackgroundJobModel).where(
                     BackgroundJobModel.status == "pending",
                     BackgroundJobModel.run_after <= now,
                     BackgroundJobModel.attempt_count < BackgroundJobModel.max_attempts,
                 )
-                .order_by(BackgroundJobModel.priority.desc(), BackgroundJobModel.created_at)
-            )
+            if job_types:
+                statement = statement.where(BackgroundJobModel.job_type.in_(job_types))
+            row = session.scalar(statement.order_by(
+                BackgroundJobModel.priority.desc(), BackgroundJobModel.created_at
+            ))
             if row is None:
                 return None
             row.status = "running"
@@ -221,4 +224,5 @@ class BackgroundJobService:
             started_at=row.started_at,
             finished_at=row.finished_at,
             last_error_code=row.last_error_code,
+            payload=json.loads(row.payload_json),
         )

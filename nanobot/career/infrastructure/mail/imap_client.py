@@ -7,7 +7,6 @@ import re
 from datetime import date
 
 from nanobot.career.application.ports.imap_client import ImapReadOnlyError
-from nanobot.career.domain.mail import MailClassification
 from nanobot.career.infrastructure.mail.parser import parse_header, parse_message
 
 
@@ -46,26 +45,14 @@ class StdlibReadOnlyImapClient:
             for uid in uids:
                 raw_header, message_size = self._fetch(client, uid, self.HEADER_QUERY)
                 parsed = parse_header(raw_header[: self.MAX_HEADER_BYTES])
-                candidate = parsed["classification"] in {
-                    MailClassification.RECRUITING.value,
-                    MailClassification.POSSIBLY_RELATED.value,
-                    MailClassification.UNKNOWN.value,
-                }
                 within_limit = message_size is None or message_size <= self.MAX_MESSAGE_BYTES
-                if candidate and within_limit:
+                if within_limit:
                     raw_message, _ = self._fetch(client, uid, "(BODY.PEEK[] RFC822.SIZE)")
                     if len(raw_message) <= self.MAX_MESSAGE_BYTES:
                         parsed = parse_message(raw_message)
                         parsed["body_fetched"] = True
                     else:
                         parsed.update(self._header_only_fields())
-                    if parsed["classification"] == MailClassification.UNRELATED.value:
-                        parsed.update(
-                            evidence_excerpt=None,
-                            body_hash=None,
-                            attachments=[],
-                            extracted={},
-                        )
                 else:
                     parsed.update(self._header_only_fields())
                 parsed["uid"] = uid

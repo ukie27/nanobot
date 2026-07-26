@@ -15,9 +15,17 @@ from nanobot.career.infrastructure.database.models import (
     ConnectorConfigModel,
     ImapAccountModel,
     MailApplicationCandidateModel,
+    MailIntelligenceAnalysisModel,
+    MailIntelligenceItemModel,
     MailMessageModel,
+    ReviewTaskModel,
     SyncCursorModel,
     SyncRunModel,
+)
+from nanobot.career.infrastructure.database.review_runtime import (
+    create_agent_run,
+    ensure_review_task,
+    set_review_resolution,
 )
 
 IMAP_CONNECTOR_ID = "00000000-0000-0000-0000-000000000007"
@@ -130,6 +138,143 @@ class SqlAlchemyMailGateway:
             if row is None:
                 raise LookupError("邮件记录不存在。")
             return self._message_view(session, row)
+
+    def save_analysis(
+        self,
+        *,
+        message_id: str,
+        result: Any,
+        input_hash: str,
+        output_hash: str,
+        audit: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Atomically persist AgentRun, structured output, items, and review projections."""
+        now = datetime.now(UTC)
+        with self._session_factory() as session:
+            message = session.get(MailMessageModel, message_id)
+            if message is None:
+                raise LookupError("邮件记录不存在。")
+            existing = session.scalar(select(MailIntelligenceAnalysisModel).where(
+                MailIntelligenceAnalysisModel.mail_message_id == message_id
+            ))
+            if existing is not None and existing.input_hash == input_hash:
+                return self._analysis_view(session, existing)
+            if existing is not None:
+                raise ValueError("邮件内容已变化，请先保留当前审核结果后再重新分析。")
+            output_count = len(result.events) + len(result.schedules) + len(result.attention_items)
+            if result.application_match.create_record_recommended:
+                output_count += 1
+            run = create_agent_run(
+                session, task_type="mail_intelligence", implementation=audit["implementation"],
+                schema_version=result.schema_version, status="succeeded", output_count=output_count,
+                error_code=None, created_at=audit["created_at"], finished_at=now,
+                provider=audit.get("provider"), model=audit.get("model"),
+                prompt_version=audit.get("prompt_version"), input_entity_type="mail_message",
+                input_entity_id=message_id, input_revision=str(message.uid), input_hash=input_hash,
+                output_hash=output_hash, input_tokens=audit.get("input_tokens"),
+                output_tokens=audit.get("output_tokens"), duration_ms=audit.get("duration_ms"),
+                retry_count=audit.get("retry_count", 0), sensitivity="sensitive",
+            )
+            match = result.application_match
+            analysis = MailIntelligenceAnalysisModel(
+                id=str(uuid4()), mail_message_id=message_id, agent_run_id=run.id,
+                schema_version=result.schema_version, relevance=result.relevance.value,
+                message_type=result.message_type, summary=result.summary,
+                company=result.company, job_title=result.job_title,
+                application_reference=result.application_reference,
+                application_id=match.application_id, job_post_id=None,
+                match_confidence=match.confidence,
+                match_reason=match.reason, create_record_recommended=int(match.create_record_recommended),
+                input_hash=input_hash, output_hash=output_hash, created_at=now, updated_at=now,
+            )
+            session.add(analysis)
+            session.flush()
+            for event in result.events:
+                self._add_intelligence_item(
+                    session, analysis, run.id, now, item_type="event", category=event.event_type,
+                    status_candidate=event.status_candidate, occurred_at=event.occurred_at,
+                    scheduled_at=None, title=event.title, details=event.details,
+                    evidence=event.evidence, confidence=event.confidence, severity=None,
+                )
+            for schedule in result.schedules:
+                self._add_intelligence_item(
+                    session, analysis, run.id, now, item_type="schedule",
+                    category=schedule.schedule_type, status_candidate=None, occurred_at=None,
+                    scheduled_at=schedule.scheduled_at, title=schedule.title,
+                    details=schedule.instructions, evidence=schedule.evidence,
+                    confidence=schedule.confidence, severity=None,
+                )
+            for attention in result.attention_items:
+                self._add_intelligence_item(
+                    session, analysis, run.id, now, item_type="attention",
+                    category=attention.category, status_candidate=None, occurred_at=None,
+                    scheduled_at=None, title=attention.title, details=attention.details,
+                    evidence=attention.evidence, confidence=None, severity=attention.severity,
+                )
+            if match.create_record_recommended:
+                self._add_intelligence_item(
+                    session, analysis, run.id, now, item_type="create_application",
+                    category="application_record", status_candidate=None, occurred_at=None,
+                    scheduled_at=None, title=f"建立投递档案：{result.company or '公司待确认'} · {result.job_title or '岗位待确认'}",
+                    details=match.reason, evidence=message.subject, confidence=match.confidence,
+                    severity=None,
+                )
+            session.commit()
+            return self._analysis_view(session, analysis)
+
+    def save_analysis_failure(
+        self, *, message_id: str, input_hash: str, error_code: str, audit: dict[str, Any]
+    ) -> None:
+        now = datetime.now(UTC)
+        with self._session_factory() as session:
+            create_agent_run(
+                session, task_type="mail_intelligence", implementation=audit["implementation"],
+                schema_version="mail_intelligence.v1", status="failed", output_count=0,
+                error_code=error_code, created_at=audit["created_at"], finished_at=now,
+                provider=audit.get("provider"), model=audit.get("model"),
+                prompt_version=audit.get("prompt_version"), input_entity_type="mail_message",
+                input_entity_id=message_id, input_hash=input_hash,
+                input_tokens=audit.get("input_tokens"), output_tokens=audit.get("output_tokens"),
+                duration_ms=audit.get("duration_ms"), retry_count=audit.get("retry_count", 0),
+                sensitivity="sensitive",
+            )
+            session.commit()
+
+    def resolve_intelligence_item(
+        self, item_id: str, *, expected_version: int, resolution: str, reason: str
+    ) -> dict[str, Any]:
+        now = datetime.now(UTC)
+        with self._session_factory() as session:
+            row = session.get(MailIntelligenceItemModel, item_id)
+            if row is None:
+                raise LookupError("邮件智能分析候选不存在。")
+            if row.status != "pending":
+                if row.status == resolution:
+                    return self._item_view(session, row)
+                raise ValueError("该候选已经处理。")
+            if row.version != expected_version:
+                raise ValueError("候选已发生变化，请刷新后重试。")
+            if resolution not in {"confirmed", "rejected"}:
+                raise ValueError("不支持的审核结果。")
+            task = session.scalar(select(ReviewTaskModel).where(
+                ReviewTaskModel.entity_type == "mail_intelligence_item",
+                ReviewTaskModel.entity_id == item_id,
+            ))
+            row.status = resolution
+            row.version += 1
+            row.resolution_reason = reason[:500]
+            row.resolved_at = now
+            if task is not None:
+                set_review_resolution(task, now=now, resolution=resolution, reason=reason)
+            session.commit()
+            return self._item_view(session, row)
+
+    def get_intelligence_item(self, item_id: str) -> dict[str, Any]:
+        with self._session_factory() as session:
+            row = session.get(MailIntelligenceItemModel, item_id)
+            if row is None:
+                raise LookupError("邮件智能分析候选不存在。")
+            return self._item_view(session, row)
 
     def start_run(self, *, trigger_type: str) -> dict[str, Any]:
         now = datetime.now(UTC)
@@ -406,6 +551,9 @@ class SqlAlchemyMailGateway:
                 MailApplicationCandidateModel.mail_message_id == row.id
             )
         )
+        analysis = session.scalar(select(MailIntelligenceAnalysisModel).where(
+            MailIntelligenceAnalysisModel.mail_message_id == row.id
+        ))
         return {
             "id": row.id,
             "uid": row.uid,
@@ -420,7 +568,66 @@ class SqlAlchemyMailGateway:
             "attachments": json.loads(row.attachments_json),
             "body_fetched": bool(row.body_fetched),
             "candidate": cls._candidate_view(candidate) if candidate else None,
+            "intelligence": cls._analysis_view(session, analysis) if analysis else None,
             "created_at": cls._utc(row.created_at),
+        }
+
+    @staticmethod
+    def _add_intelligence_item(
+        session, analysis, agent_run_id: str, now: datetime, **values: Any
+    ) -> None:
+        row = MailIntelligenceItemModel(
+            id=str(uuid4()), analysis_id=analysis.id, status="pending", version=1,
+            resolution_reason=None, created_at=now, resolved_at=None, **values,
+        )
+        session.add(row)
+        session.flush()
+        ensure_review_task(
+            session, task_type="mail_intelligence_review",
+            entity_type="mail_intelligence_item", entity_id=row.id,
+            title=row.title, summary=f"{row.details}\n证据：{row.evidence}".strip(),
+            source_type="imap_agent", priority=50 if row.severity == "critical" else 35,
+            agent_run_id=agent_run_id, now=now,
+        )
+
+    @classmethod
+    def _analysis_view(cls, session, row: MailIntelligenceAnalysisModel) -> dict[str, Any]:
+        items = session.scalars(select(MailIntelligenceItemModel).where(
+            MailIntelligenceItemModel.analysis_id == row.id
+        ).order_by(MailIntelligenceItemModel.created_at, MailIntelligenceItemModel.id)).all()
+        return {
+            "id": row.id, "agent_run_id": row.agent_run_id,
+            "schema_version": row.schema_version, "relevance": row.relevance,
+            "message_type": row.message_type, "summary": row.summary,
+            "company": row.company, "job_title": row.job_title,
+            "application_reference": row.application_reference,
+            "application_match": {
+                "application_id": row.application_id, "confidence": row.match_confidence,
+                "reason": row.match_reason,
+                "create_record_recommended": bool(row.create_record_recommended),
+            },
+            "job_post_id": row.job_post_id,
+            "items": [cls._item_view(session, item) for item in items],
+            "created_at": cls._utc(row.created_at), "updated_at": cls._utc(row.updated_at),
+        }
+
+    @classmethod
+    def _item_view(cls, session, row: MailIntelligenceItemModel) -> dict[str, Any]:
+        analysis = session.get(MailIntelligenceAnalysisModel, row.analysis_id)
+        task = session.scalar(select(ReviewTaskModel).where(
+            ReviewTaskModel.entity_type == "mail_intelligence_item",
+            ReviewTaskModel.entity_id == row.id,
+        ))
+        return {
+            "id": row.id, "item_type": row.item_type, "category": row.category,
+            "application_id": analysis.application_id if analysis else None,
+            "status_candidate": row.status_candidate, "occurred_at": cls._utc(row.occurred_at),
+            "scheduled_at": cls._utc(row.scheduled_at), "title": row.title,
+            "details": row.details, "evidence": row.evidence, "confidence": row.confidence,
+            "severity": row.severity, "status": row.status, "version": row.version,
+            "resolution_reason": row.resolution_reason,
+            "review_task_id": task.id if task else None,
+            "created_at": cls._utc(row.created_at), "resolved_at": cls._utc(row.resolved_at),
         }
 
     @classmethod

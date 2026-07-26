@@ -1,5 +1,5 @@
-"""Candidate profile and verified fact domain."""
+"""Structured profile intelligence contracts."""
 
-from nanobot.career.domain.profile.entities import CandidateFact, FactStatus
+from nanobot.career.domain.profile.insight import ProfileInsightItem, ProfileInsightResult
 
-__all__ = ["CandidateFact", "FactStatus"]
+__all__ = ["ProfileInsightItem", "ProfileInsightResult"]

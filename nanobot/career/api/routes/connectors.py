@@ -4,7 +4,12 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Request
 
-from nanobot.career.api.schemas import ConnectorConfigUpdate, ConnectorLoginRequest
+from nanobot.career.api.schemas import (
+    ConnectorConfigUpdate,
+    ConnectorLoginRequest,
+    NowcoderConnectorConfigUpdate,
+    NowcoderScanRequest,
+)
 from nanobot.career.infrastructure.connectors import OpenCliError
 
 router = APIRouter(prefix="/api/v1/connectors", tags=["connectors"])
@@ -60,3 +65,37 @@ def run_due(request: Request) -> dict:
     except (OpenCliError, RuntimeError, ValueError) as exc:
         code = exc.code if isinstance(exc, OpenCliError) else "connector_failed"
         raise HTTPException(status_code=409, detail={"code": code, "message": str(exc)}) from exc
+
+
+@router.get("/nowcoder")
+def get_nowcoder(request: Request) -> dict:
+    return request.app.state.nowcoder_connector_service.get()
+
+
+@router.put("/nowcoder")
+def configure_nowcoder(body: NowcoderConnectorConfigUpdate, request: Request) -> dict:
+    try:
+        return request.app.state.nowcoder_connector_service.configure(**body.model_dump())
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/nowcoder/health")
+def nowcoder_health(request: Request) -> dict:
+    return request.app.state.nowcoder_connector_service.health()
+
+
+@router.post("/nowcoder/scan")
+def nowcoder_scan(body: NowcoderScanRequest, request: Request) -> dict:
+    try:
+        return request.app.state.nowcoder_connector_service.scan(
+            lookback_days=body.lookback_days
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except OpenCliError as exc:
+        raise HTTPException(
+            status_code=409, detail={"code": exc.code, "message": str(exc)}
+        ) from exc

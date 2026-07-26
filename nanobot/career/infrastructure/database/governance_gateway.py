@@ -113,24 +113,6 @@ class SqlAlchemyGovernanceGateway:
                     results.append(self._search_item("interview", item.id, application.job_title_snapshot, application.company_name_snapshot, f"/interviews/{item.id}"))
         return results[:100]
 
-    def review_queue(self) -> list[dict[str, Any]]:
-        with self._session_factory() as session:
-            rows = session.scalars(
-                select(ReviewTaskModel)
-                .where(ReviewTaskModel.status == "open")
-                .order_by(ReviewTaskModel.created_at)
-            ).all()
-            return [
-                {
-                    "id": item.id,
-                    "review_type": item.entity_type,
-                    "entity_id": item.entity_id,
-                    "created_at": self._utc(item.created_at),
-                    "target_url": "/application-review" if item.entity_type == "application_event_proposal" else "/interviews",
-                }
-                for item in rows
-            ]
-
     def create_backup_bundle(self) -> dict[str, Any]:
         self._settings.ensure_directories()
         database_copy = backup_database(self._settings, label="full-bundle")

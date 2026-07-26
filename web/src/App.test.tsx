@@ -100,6 +100,81 @@ describe("Career app shell", () => {
     expect(heading.closest("a")).toHaveTextContent("v2");
   });
 
+  it("keeps recruitment opportunities separate from concrete job posts", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        total: 1,
+        items: [{
+          id: "opportunity-1", company: "网易游戏雷火", batch: "27届秋招",
+          cities: "杭州", careers: "后端开发,测试", industries: "游戏",
+          evaluation: "公开校招项目", application_starts_at: "2026-07-26T00:00:00Z",
+          application_ends_at: "2026-08-26T00:00:00Z",
+          announcement_url: "https://example.com/announcement",
+          application_url: "https://example.com/apply", triage_status: "new", version: 1,
+          first_collected_at: "2026-07-26T01:00:00Z", last_collected_at: "2026-07-26T01:00:00Z",
+          created_at: "2026-07-26T01:00:00Z", updated_at: "2026-07-26T01:00:00Z",
+          sources: [{ id: "source", external_id: "895:1210:1784390400000",
+            source_url: "https://www.nowcoder.com/enterprise/895", first_seen_at: "2026-07-26T01:00:00Z",
+            last_seen_at: "2026-07-26T01:00:00Z" }],
+          linked_jobs: [],
+        }],
+      }),
+    }));
+    renderApp("/opportunities");
+    expect(await screen.findByRole("heading", { name: "招聘机会" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "网易游戏雷火 · 27届秋招" })).toBeInTheDocument();
+    expect(screen.getByText("这里收录招聘项目线索，不代表具体岗位 JD")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "打开官方投递入口" })).toHaveAttribute(
+      "href", "https://example.com/apply",
+    );
+    expect(screen.getByRole("link", { name: "具体岗位池" })).toHaveAttribute("href", "/job-posts");
+    expect(screen.getByRole("link", { name: "导入具体 JD" })).toHaveAttribute(
+      "href", "/job-posts?opportunityId=opportunity-1",
+    );
+  });
+
+  it("renders one cross-domain human review queue", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ total: 1, items: [{
+        id: "review-1", task_type: "candidate_fact_review", entity_type: "candidate_fact",
+        entity_id: "fact-1", title: "确认职业事实：Python", summary: "技能：Python",
+        source_type: "agent_extraction", priority: 20, status: "open", version: 1,
+        agent_run_id: "agent-run-1234", target_url: "/review",
+        created_at: "2026-07-26T01:00:00Z", updated_at: "2026-07-26T01:00:00Z",
+        resolved_at: null, resolution: null, resolution_reason: null, resolved_by: null,
+      }] }),
+    }));
+    renderApp("/reviews");
+    expect(await screen.findByRole("heading", { name: "审查中心" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "确认职业事实：Python" })).toBeInTheDocument();
+    expect(screen.getByText("Agent 只能提出候选，不能直接改变正式业务事实")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /确认职业事实：Python/ })).toHaveAttribute("href", "/review");
+  });
+
+  it("renders safe AgentRun audit metadata without business content", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ total: 1, items: [{
+        id: "run-1", task_type: "profile_fact_extraction", execution_mode: "task",
+        implementation: "nanobot_profile_fact_extractor", provider: "LocalProvider",
+        model: "local-model", prompt_version: "profile_fact_extraction.v1", skill_version: null,
+        schema_version: "candidate_fact.v1", input_entity_type: "document",
+        input_entity_id: "document-1", input_revision: "hash", input_hash: "a".repeat(64),
+        output_hash: "b".repeat(64), tool_calls: [], status: "succeeded", output_count: 2,
+        input_tokens: 100, output_tokens: 40, duration_ms: 250, retry_count: 0,
+        sensitivity: "sensitive", error_code: null, created_at: "2026-07-26T01:00:00Z",
+        finished_at: "2026-07-26T01:00:00Z", retention_until: null,
+      }] }),
+    }));
+    renderApp("/agent-runs");
+    expect(await screen.findByRole("heading", { name: "Agent 运行记录" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "profile_fact_extraction" })).toBeInTheDocument();
+    expect(screen.getByText("LocalProvider · local-model")).toBeInTheDocument();
+    expect(screen.getByText("这里是业务 Agent 审计记录，不是聊天 Session")).toBeInTheDocument();
+  });
+
   it("renders final material with fact evidence and verified export", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
       ok: true,
@@ -167,21 +242,37 @@ describe("Career app shell", () => {
         generated_at: "2026-07-24T00:00:00Z", timezone: "Asia/Shanghai", today: [task],
         overdue: [], upcoming: [task], interviews: [task], pending_review_count: 2,
         unread_notification_count: 1, conflict_count: 1,
-      } : { total: 1, items: [{ id: "notification", reminder_id: "reminder", notification_type: "in_app",
+      } : String(input).includes("/api/v1/opportunities") ? { total: 1, items: [{
+        id: "opportunity", company: "网易游戏雷火", batch: "27届秋招", cities: "杭州",
+        careers: "后端开发", industries: "游戏", evaluation: "", application_starts_at: null,
+        application_ends_at: null, announcement_url: null, application_url: "https://example.com/apply",
+        triage_status: "new", version: 1, first_collected_at: "2026-07-24T00:00:00Z",
+        last_collected_at: "2026-07-24T00:00:00Z", created_at: "2026-07-24T00:00:00Z",
+        updated_at: "2026-07-24T00:00:00Z", sources: [], linked_jobs: [],
+      }] } : { total: 1, items: [{ id: "notification", reminder_id: "reminder", notification_type: "in_app",
         title: "参加面试 · 示例科技", body: "任务将在 60 分钟后到期。", status: "unread",
         created_at: "2026-07-24T00:00:00Z", read_at: null }] },
     })));
     renderApp("/dashboard");
     expect(await screen.findByRole("heading", { name: "今日 Dashboard" })).toBeInTheDocument();
+    expect(await screen.findByText("网易游戏雷火 · 27届秋招")).toBeInTheDocument();
     expect((await screen.findAllByText("参加面试 · 示例科技")).length).toBeGreaterThan(0);
     expect(screen.getByText("任务将在 60 分钟后到期。")).toBeInTheDocument();
     expect(screen.getAllByText("时间冲突").length).toBeGreaterThan(0);
   });
 
   it("renders the read-only OpenCLI BOSS data source", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+    vi.stubGlobal("fetch", vi.fn().mockImplementation((input: string) => Promise.resolve({
       ok: true,
-      json: async () => ({
+      json: async () => String(input).includes("/nowcoder") ? ({
+        id: "nowcoder", connector_type: "opencli_nowcoder", display_name: "牛客校招日程（OpenCLI）",
+        enabled: true, search_query: "", city: "全国", result_limit: 500,
+        schedule_enabled: true, schedule_times: ["09:00"], timezone: "Asia/Shanghai",
+        next_scan_at: "2026-07-25T01:00:00Z", health_status: "healthy",
+        last_error_code: null, last_success_at: "2026-07-24T10:00:00Z", version: 1,
+        automatic_scope: "today", manual_lookback_options: [0, 7, 14, 30],
+        runs: [], quarantine: [],
+      }) : ({
         id: "boss", connector_type: "opencli_boss", display_name: "BOSS 直聘（OpenCLI）",
         enabled: true, profile_alias: "career", search_query: "Python", city: "上海",
         result_limit: 10, schedule_enabled: true, schedule_times: ["09:00", "18:00"],
@@ -192,10 +283,11 @@ describe("Career app shell", () => {
           quarantined_count: 0, error_code: null, started_at: "2026-07-24T10:00:00Z",
           finished_at: "2026-07-24T10:01:00Z" }], quarantine: [],
       }),
-    }));
+    })));
     renderApp("/data-sources");
     expect(await screen.findByRole("heading", { name: "数据来源" })).toBeInTheDocument();
     expect(screen.getByText("只读安全边界")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "牛客校招日程" })).toBeInTheDocument();
     expect(await screen.findByDisplayValue("career")).toBeInTheDocument();
     expect(await screen.findByText("4 / 1 / 5 / 0")).toBeInTheDocument();
   });

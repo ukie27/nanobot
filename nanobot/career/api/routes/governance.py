@@ -24,8 +24,7 @@ def search(request: Request, q: str = Query(min_length=2, max_length=200)) -> di
 
 @router.get("/reviews")
 def reviews(request: Request) -> dict:
-    items = request.app.state.governance_service.review_queue()
-    return {"items": items, "total": len(items)}
+    return request.app.state.runtime_service.reviews(status="open")
 
 
 @router.get("/integration-health")

@@ -40,6 +40,29 @@ class FinalizeMaterialRequest(BaseModel):
     expected_version: int = Field(ge=1)
 
 
+class GenerateAgentMaterialRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    job_post_id: str = Field(min_length=1, max_length=36)
+    resume_id: str | None = Field(default=None, max_length=36)
+    resume_name: str = Field(default="我的基础简历", min_length=1, max_length=300)
+
+
+class ResolveAgentMaterialRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_version: int = Field(ge=1)
+    resolution: str = Field(pattern="^(confirmed|rejected)$")
+    reason: str = Field(default="", max_length=500)
+
+
+class ForkResumeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    material_id: str = Field(min_length=1, max_length=36)
+    series_type: str = Field(pattern="^(base|direction)$")
+    name: str = Field(min_length=1, max_length=300)
+    parent_resume_id: str | None = Field(default=None, max_length=36)
+    direction_label: str | None = Field(default=None, max_length=120)
+
+
 class MaterialFactSnapshotResponse(BaseModel):
     id: str
     fact_id: str
@@ -59,6 +82,8 @@ class MaterialBlockResponse(BaseModel):
 class MaterialVersionResponse(BaseModel):
     id: str
     parent_version_id: str | None
+    source_resume_version_id: str | None
+    version_scope: str
     version_number: int
     status: str
     title: str
@@ -109,6 +134,9 @@ class MaterialSummaryResponse(BaseModel):
     id: str
     resume_id: str
     name: str
+    resume_series_type: str
+    source_resume_version_id: str | None
+    resume_direction_selection_id: str | None
     material_type: MaterialType
     status: str
     version: int
@@ -117,6 +145,9 @@ class MaterialSummaryResponse(BaseModel):
     job_title: str
     company: str
     current_version_number: int
+    strategy_stale: bool
+    strategy_stale_reason: str | None
+    strategy_stale_at: datetime | None
     created_at: datetime
     updated_at: datetime
 
@@ -136,7 +167,11 @@ class MaterialListResponse(BaseModel):
 class ResumeSeriesResponse(BaseModel):
     id: str
     name: str
+    series_type: str
+    parent_resume_id: str | None
+    direction_label: str | None
     material_count: int
+    latest_version: MaterialVersionResponse | None
     created_at: datetime
     updated_at: datetime
 
@@ -146,10 +181,45 @@ class ResumeSeriesListResponse(BaseModel):
     total: int
 
 
+@router.get("/agent-proposals")
+def list_agent_material_proposals(job_post_id: str, request: Request) -> dict:
+    return request.app.state.material_agent_service.list_for_job(job_post_id)
+
+
+@router.post("/agent-proposals", status_code=status.HTTP_201_CREATED)
+def generate_agent_material(body: GenerateAgentMaterialRequest, request: Request) -> dict:
+    return request.app.state.material_agent_service.generate(
+        body.job_post_id, resume_id=body.resume_id, resume_name=body.resume_name
+    )
+
+
+@router.post("/agent-proposals/{proposal_id}/resolve")
+def resolve_agent_material(proposal_id: str, body: ResolveAgentMaterialRequest,
+                           request: Request) -> dict:
+    return request.app.state.material_agent_service.resolve(
+        proposal_id, expected_version=body.expected_version,
+        resolution=body.resolution, reason=body.reason,
+    )
+
+
 @resume_router.get("", response_model=ResumeSeriesListResponse)
 def list_resumes(request: Request) -> dict:
     items = request.app.state.material_gateway.list_resumes()
     return {"items": items, "total": len(items)}
+
+
+@resume_router.post("/from-material", status_code=status.HTTP_201_CREATED,
+                    response_model=ResumeSeriesResponse)
+def fork_resume(body: ForkResumeRequest, request: Request) -> dict:
+    return request.app.state.material_service.fork_resume(
+        body.material_id, series_type=body.series_type, name=body.name,
+        parent_resume_id=body.parent_resume_id, direction_label=body.direction_label,
+    )
+
+
+@resume_router.get("/versions/{from_version_id}/diff/{to_version_id}")
+def diff_resume_versions(from_version_id: str, to_version_id: str, request: Request) -> dict:
+    return request.app.state.material_gateway.diff_versions(from_version_id, to_version_id)
 
 
 @router.get("", response_model=MaterialListResponse)

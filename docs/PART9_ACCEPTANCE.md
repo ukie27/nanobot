@@ -18,7 +18,7 @@
 .\.venv\Scripts\python.exe -m nanobot career db restore <backup.zip> --confirm RESTORE --data-dir <temp-dir>
 ```
 
-4. 恢复后执行 `career doctor`，数据库 revision 应为 `20260724_0010`。
+4. 恢复后执行 `career doctor`，数据库 revision 应为 `20260726_0021`。
 5. Blob 垃圾回收只能删除数据库未引用文件，并按配置清理过期 Agent trace。
 6. 删除单一 Connector 必须输入 `DELETE <connector_type>`；删除全部数据必须输入 `DELETE ALL CAREER DATA`，并先自动创建恢复包。
 7. 在工作区查看“跨模块一致性”，确认申请时间线、投递快照、面试任务、事件关联和统一审查队列没有 error；历史不完整数据允许以 warning 明确展示。

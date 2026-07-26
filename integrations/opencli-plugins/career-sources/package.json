@@ -1,0 +1,9 @@
+{
+  "name": "opencli-plugin-career-sources",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "peerDependencies": {
+    "@jackwener/opencli": ">=1.8.6"
+  }
+}

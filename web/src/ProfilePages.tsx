@@ -9,6 +9,13 @@ import {
   getDocuments,
   getFacts,
   getProfile,
+  getProfileMemory,
+  setCareerPreference,
+  generateDailyDigest,
+  generateStrategyProposal,
+  generateProfileInsight,
+  resolveProfileMemoryProposal,
+  runProfileImpacts,
   importFile,
   importText,
   rejectFact,
@@ -41,10 +48,33 @@ export function ProfilePage() {
       <article><span>已拒绝</span><strong>{profile.data?.fact_counts.rejected ?? 0}</strong><small>保留审计记录</small></article>
       <article><span>时区</span><strong>{profile.data?.timezone}</strong><small>档案版本 {profile.data?.version}</small></article>
     </section>
+    <ProfileBusinessMemory />
     <ManualFactForm />
     {(facts.data?.total ?? 0) === 0 && <section className="empty-state"><div className="empty-icon">＋</div><h2>还没有已确认事实</h2><p>先导入简历，然后在“事实审查”中逐条确认。只有确认后的事实才会进入可信档案。</p></section>}
     {Object.entries(grouped).map(([category, items]) => items && <section className="panel fact-group" key={category}><div className="panel-heading"><h2>{CATEGORY_LABELS[category] ?? category}</h2><span>{items.length} 条</span></div>{items.map((fact) => <FactRow fact={fact} readonly key={fact.id} />)}</section>)}
   </>;
+}
+
+function ProfileBusinessMemory() {
+  const client = useQueryClient();
+  const query = useQuery({ queryKey: ["profile-memory"], queryFn: getProfileMemory });
+  const refresh = async () => { await Promise.all([client.invalidateQueries({ queryKey: ["profile-memory"] }), client.invalidateQueries({ queryKey: ["unified-reviews"] })]); };
+  const preference = useMutation({ mutationFn: ({ key, value }: { key: string; value: string[] }) => { const current = query.data?.preferences.find(item => item.preference_key === key); return setCareerPreference(key, value, current?.version ?? null); }, onSuccess: refresh });
+  const digest = useMutation({ mutationFn: generateDailyDigest, onSuccess: refresh });
+  const strategy = useMutation({ mutationFn: generateStrategyProposal, onSuccess: refresh });
+  const insight = useMutation({ mutationFn: generateProfileInsight, onSuccess: refresh });
+  const impacts = useMutation({ mutationFn: runProfileImpacts, onSuccess: refresh });
+  const resolve = useMutation({ mutationFn: ({ entityType, item, resolution }: { entityType: "profile_insight" | "strategy_snapshot"; item: { id: string; version: number }; resolution: "confirmed" | "rejected" }) => resolveProfileMemoryProposal(entityType, item, resolution), onSuccess: refresh });
+  const submitPreference = (event: FormEvent<HTMLFormElement>) => { event.preventDefault(); const data = new FormData(event.currentTarget); const key = String(data.get("key")); const value = String(data.get("value")).split(/[,，、]/).map(item => item.trim()).filter(Boolean); preference.mutate({ key, value }); };
+  const latestDigest = query.data?.digests[0];
+  return <section className="profile-memory">
+    <section className="panel"><div className="panel-heading"><div><p className="eyebrow">EXPLICIT PREFERENCES</p><h2>求职偏好</h2></div><span>{query.data?.preferences.length ?? 0} 项</span></div><form className="form-grid" onSubmit={submitPreference}><label>偏好类型<select name="key"><option value="target_roles">目标岗位族</option><option value="target_cities">目标城市</option><option value="industries">目标行业</option><option value="work_modes">工作方式</option><option value="constraints">限制条件</option></select></label><label className="wide">内容（逗号分隔）<input name="value" required placeholder="例如：后端工程、AI 应用" /></label><button disabled={preference.isPending}>确认并写入偏好事件</button></form>{query.data?.preferences.map(item => <div className="fact-row" key={item.id}><div><strong>{Array.isArray(item.value) ? item.value.join("、") : JSON.stringify(item.value)}</strong><span>{item.preference_key} · v{item.version}</span></div></div>)}</section>
+    <section className="panel"><div className="panel-heading"><div><p className="eyebrow">REFLECTIVE MEMORY</p><h2>优势与成长洞察</h2></div><button className="secondary" onClick={() => insight.mutate()} disabled={insight.isPending}>调用 Agent 生成候选</button></div>{query.data?.insights.map(item => <article className="mail-intelligence-item" key={item.id}><strong>{item.insight_type} · 置信度 {Math.round(item.confidence * 100)}%</strong><p>{item.conclusion}</p><small>{item.source} · Fact IDs：{item.evidence_refs.join("、")}</small>{item.counter_evidence.length > 0 && <small>反证 Fact IDs：{item.counter_evidence.join("、")}</small>}{item.agent_run_id && <p><a href="/agent-runs">AgentRun {item.agent_run_id.slice(0, 8)}</a></p>}{item.status === "proposed" ? <div className="fact-actions"><button onClick={() => resolve.mutate({ entityType: "profile_insight", item, resolution: "confirmed" })}>确认洞察</button><button className="secondary" onClick={() => resolve.mutate({ entityType: "profile_insight", item, resolution: "rejected" })}>拒绝</button></div> : <span className="health-pill ok">已{item.status === "confirmed" ? "确认" : "拒绝"}</span>}</article>)}{!query.data?.insights.length && <p>尚无业务洞察。洞察只引用已确认事实，且确认前不会进入可信档案。</p>}</section>
+    <section className="panel"><div className="panel-heading"><div><p className="eyebrow">VERSIONED STRATEGY</p><h2>策略历史</h2></div><button className="secondary" onClick={() => strategy.mutate()} disabled={strategy.isPending}>生成本周策略候选</button></div>{query.data?.strategies.map(item => <details key={item.id}><summary>策略 v{item.version_number} · {item.status}</summary><p>目标：{JSON.stringify(item.content.target_directions)} · 地点：{JSON.stringify(item.content.priority_locations)}</p><ul>{item.content.actions.map(action => <li key={action}>{action}</li>)}</ul>{item.status === "proposed" && <div className="fact-actions"><button onClick={() => resolve.mutate({ entityType: "strategy_snapshot", item, resolution: "confirmed" })}>确认策略</button><button className="secondary" onClick={() => resolve.mutate({ entityType: "strategy_snapshot", item, resolution: "rejected" })}>拒绝</button></div>}</details>)}</section>
+    <section className="panel"><div className="panel-heading"><div><p className="eyebrow">DAILY DIGEST</p><h2>每日增量整理</h2></div><button className="secondary" onClick={() => digest.mutate()} disabled={digest.isPending}>立即重建今日摘要</button></div>{latestDigest ? <><p>{latestDigest.digest_date}：{latestDigest.content.changes.length} 项档案变化，{latestDigest.content.application_changes.length} 项申请变化，{latestDigest.content.pending_review_count} 项待确认。</p>{latestDigest.content.risks.map(risk => <p className="form-error" key={risk}>{risk}</p>)}</> : <p>摘要由业务事件重建，不会覆盖事实或策略。</p>}</section>
+    <section className="panel"><div className="panel-heading"><div><p className="eyebrow">IMPACT PROJECTION</p><h2>档案变化影响处理</h2></div><button className="secondary" onClick={() => impacts.mutate()} disabled={impacts.isPending}>处理待执行影响</button></div>{query.data?.impact_runs.map(item => <div className="history-row" key={item.id}>{item.scope} · {item.status}<small>影响 {item.affected_count} 项 · revision {item.input_revision}</small>{item.error_code && <span className="form-error">{item.error_code}</span>}</div>)}{!query.data?.impact_runs.length && <p>尚无影响处理记录。事实、偏好或已确认洞察变化后会创建持久化任务。</p>}</section>
+    {(query.error || preference.error || digest.error || strategy.error || insight.error || impacts.error || resolve.error) && <section className="notice error">{(query.error || preference.error || digest.error || strategy.error || insight.error || impacts.error || resolve.error)?.message}</section>}
+  </section>;
 }
 
 function ManualFactForm() {

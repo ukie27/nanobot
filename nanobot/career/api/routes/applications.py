@@ -120,6 +120,32 @@ class AvailableFinalMaterialResponse(BaseModel):
     material_type: str
 
 
+class ApplicationMailEvidenceItemResponse(BaseModel):
+    id: str
+    item_type: str
+    category: str
+    title: str
+    details: str
+    evidence: str
+    occurred_at: datetime | None
+    scheduled_at: datetime | None
+    status: str
+
+
+class ApplicationMailEvidenceResponse(BaseModel):
+    analysis_id: str
+    message_id: str
+    agent_run_id: str
+    sender: str
+    subject: str
+    sent_at: datetime | None
+    message_type: str
+    summary: str
+    match_confidence: float
+    items: list[ApplicationMailEvidenceItemResponse]
+    created_at: datetime
+
+
 class ApplicationProposalResponse(BaseModel):
     id: str
     application_id: str
@@ -151,6 +177,7 @@ class ApplicationResponse(ApplicationSummaryResponse):
     material_snapshots: list[ApplicationMaterialSnapshotResponse]
     proposals: list[ApplicationProposalResponse]
     available_final_materials: list[AvailableFinalMaterialResponse]
+    mail_evidence: list[ApplicationMailEvidenceResponse]
 
 
 class ApplicationListResponse(BaseModel):

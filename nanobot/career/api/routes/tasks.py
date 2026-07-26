@@ -187,16 +187,20 @@ def read_notification(notification_id: str, request: Request) -> dict:
 @scheduler_router.post("/run-due", response_model=RunDueResponse)
 def run_due(body: RunDueRequest, request: Request) -> dict:
     result = request.app.state.task_service.run_due(now=body.now)
-    try:
-        connector_run = request.app.state.connector_service.run_due()
-        result["connector_runs_processed"] = int(connector_run is not None)
-        result["connector_error_code"] = None
-    except OpenCliError as exc:
-        result["connector_runs_processed"] = 0
-        result["connector_error_code"] = exc.code
-    except (RuntimeError, ValueError):
-        result["connector_runs_processed"] = 0
-        result["connector_error_code"] = "connector_failed"
+    processed = 0
+    error_code = None
+    for service in (
+        request.app.state.connector_service,
+        request.app.state.nowcoder_connector_service,
+    ):
+        try:
+            processed += int(service.run_due() is not None)
+        except OpenCliError as exc:
+            error_code = error_code or exc.code
+        except (RuntimeError, ValueError):
+            error_code = error_code or "connector_failed"
+    result["connector_runs_processed"] = processed
+    result["connector_error_code"] = error_code
     return result
 
 

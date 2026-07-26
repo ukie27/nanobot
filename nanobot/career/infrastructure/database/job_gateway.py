@@ -32,6 +32,9 @@ from nanobot.career.infrastructure.database.models import (
     JobPostSourceModel,
     JobPostVersionModel,
     JobRequirementModel,
+    MailIntelligenceAnalysisModel,
+    OpportunityJobLinkModel,
+    RecruitmentOpportunityModel,
 )
 from nanobot.career.infrastructure.database.profile_gateway import PROFILE_ID, EntityNotFoundError
 
@@ -50,6 +53,8 @@ class SqlAlchemyJobGateway:
         extracted: ExtractedJob,
         extractor_name: str,
         extractor_schema_version: str,
+        opportunity_id: str | None = None,
+        mail_analysis_id: str | None = None,
     ) -> dict[str, Any]:
         now = datetime.now(UTC)
         content_hash = hashlib.sha256(self._canonical_content(text).encode("utf-8")).hexdigest()
@@ -114,6 +119,8 @@ class SqlAlchemyJobGateway:
                 )
             )
             if existing_version is not None:
+                self._link_opportunity(session, opportunity_id, post.id, now)
+                self._link_mail_analysis(session, mail_analysis_id, post.id, now)
                 session.commit()
                 return self._job_view(session, post, duplicate=True)
             next_number = (
@@ -162,6 +169,8 @@ class SqlAlchemyJobGateway:
             post.updated_at = now
             session.flush()
             self._create_analysis(session, post, version, profile, now)
+            self._link_opportunity(session, opportunity_id, post.id, now)
+            self._link_mail_analysis(session, mail_analysis_id, post.id, now)
             session.commit()
             return self._job_view(session, post, duplicate=False, created=created)
 
@@ -187,9 +196,26 @@ class SqlAlchemyJobGateway:
                 raise EntityNotFoundError("Job post was not found.")
             version = self._latest_version(session, post.id)
             profile = self._ensure_profile(session, now)
+            facts = session.scalars(
+                select(CandidateFactModel).where(
+                    CandidateFactModel.profile_id == profile.id,
+                    CandidateFactModel.status == "confirmed",
+                ).order_by(CandidateFactModel.id)
+            ).all()
+            fact_set_hash = hashlib.sha256(
+                "\n".join(f"{fact.id}:{fact.version}:{fact.value}" for fact in facts).encode("utf-8")
+            ).hexdigest()
+            existing = session.scalar(select(JobMatchAnalysisModel).where(
+                JobMatchAnalysisModel.job_post_id == post.id,
+                JobMatchAnalysisModel.job_post_version_id == version.id,
+                JobMatchAnalysisModel.profile_id == profile.id,
+                JobMatchAnalysisModel.fact_set_hash == fact_set_hash,
+            ).order_by(JobMatchAnalysisModel.created_at.desc()))
+            if existing is not None:
+                return {**self._analysis_view(session, existing), "reused": True}
             analysis = self._create_analysis(session, post, version, profile, now)
             session.commit()
-            return self._analysis_view(session, analysis)
+            return {**self._analysis_view(session, analysis), "reused": False}
 
     def _create_analysis(
         self,
@@ -414,6 +440,11 @@ class SqlAlchemyJobGateway:
             .where(JobMatchAnalysisModel.job_post_id == post.id)
             .order_by(JobMatchAnalysisModel.created_at.desc())
         ).all()
+        opportunity_ids = session.scalars(
+            select(OpportunityJobLinkModel.opportunity_id).where(
+                OpportunityJobLinkModel.job_post_id == post.id
+            )
+        ).all()
         result.update(
             {
                 "duplicate": duplicate,
@@ -443,6 +474,7 @@ class SqlAlchemyJobGateway:
                     for item in sources
                 ],
                 "analyses": [self._analysis_view(session, item) for item in analyses],
+                "opportunity_ids": list(opportunity_ids),
             }
         )
         return result
@@ -556,6 +588,49 @@ class SqlAlchemyJobGateway:
             session.add(company)
             session.flush()
         return company
+
+    @staticmethod
+    def _link_opportunity(
+        session: Session,
+        opportunity_id: str | None,
+        job_post_id: str,
+        now: datetime,
+    ) -> None:
+        if opportunity_id is None:
+            return
+        if session.get(RecruitmentOpportunityModel, opportunity_id) is None:
+            raise LookupError("招聘机会不存在。")
+        existing = session.scalar(
+            select(OpportunityJobLinkModel).where(
+                OpportunityJobLinkModel.opportunity_id == opportunity_id,
+                OpportunityJobLinkModel.job_post_id == job_post_id,
+            )
+        )
+        if existing is None:
+            session.add(
+                OpportunityJobLinkModel(
+                    id=str(uuid4()),
+                    opportunity_id=opportunity_id,
+                    job_post_id=job_post_id,
+                    created_at=now,
+                )
+            )
+
+    @staticmethod
+    def _link_mail_analysis(
+        session: Session, mail_analysis_id: str | None, job_post_id: str, now: datetime
+    ) -> None:
+        del now
+        if mail_analysis_id is None:
+            return
+        analysis = session.get(MailIntelligenceAnalysisModel, mail_analysis_id)
+        if analysis is None:
+            raise LookupError("邮件智能分析不存在。")
+        if analysis.application_id is not None:
+            raise ValueError("该邮件已经关联正式申请。")
+        if analysis.job_post_id not in {None, job_post_id}:
+            raise ValueError("该邮件已经关联其他岗位。")
+        analysis.job_post_id = job_post_id
 
     @staticmethod
     def _ensure_profile(session: Session, now: datetime) -> CandidateProfileModel:

@@ -30,7 +30,7 @@ $env:NANOBOT_CAREER_OPENCLI_EXECUTABLE = "D:\path\to\opencli.cmd"
 预期关键结果：
 
 ```text
-DB revision  20260724_0010  20260724_0010  PASS
+DB revision  20260726_0021  20260726_0021  PASS
 Node.js      v20+            >= 20 ...      PASS
 OpenCLI      <version>       available ... PASS
 ```

@@ -16,6 +16,7 @@ from zoneinfo import ZoneInfo
 from nanobot.career.domain.mail import classification_from_text
 
 MAX_EXTRACTED_TEXT_CHARS = 200_000
+MAX_AGENT_EVIDENCE_CHARS = 20_000
 MAX_ATTACHMENT_METADATA = 100
 
 
@@ -119,7 +120,7 @@ def parse_message(raw: bytes) -> dict[str, Any]:
         {
             "classification": classification,
             "event_kind": event_kind,
-            "evidence_excerpt": body[:2000] or None,
+            "evidence_excerpt": body[:MAX_AGENT_EVIDENCE_CHARS] or None,
             "body_hash": hashlib.sha256(body.encode("utf-8")).hexdigest() if body else None,
             "attachments": attachments,
             "extracted": _extract(body, header["subject"]),

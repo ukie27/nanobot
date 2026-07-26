@@ -143,7 +143,23 @@ def test_unmet_must_requirement_is_an_explicit_gap(tmp_path: Path) -> None:
 
         refreshed = client.post(f"/api/v1/job-posts/{job['id']}/analyses")
         assert refreshed.status_code == 201
-        assert len(client.get(f"/api/v1/job-posts/{job['id']}").json()["analyses"]) == 2
+        assert refreshed.json()["reused"] is True
+        assert len(client.get(f"/api/v1/job-posts/{job['id']}").json()["analyses"]) == 1
+
+
+def test_invalid_opportunity_does_not_create_partial_job(tmp_path: Path) -> None:
+    settings = CareerSettings(data_dir=tmp_path / "career")
+    with TestClient(create_app(settings)) as client:
+        response = client.post(
+            "/api/v1/job-posts/import-text",
+            json={
+                "name": "官网 JD",
+                "text": "职位：后端工程师\n公司：示例科技\n任职要求\n- 熟练 Python",
+                "opportunity_id": "missing-opportunity",
+            },
+        )
+        assert response.status_code == 404, response.text
+        assert client.get("/api/v1/job-posts").json()["total"] == 0
 
 
 def test_pasted_job_respects_document_size_limit(tmp_path: Path) -> None:

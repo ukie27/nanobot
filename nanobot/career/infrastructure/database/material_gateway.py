@@ -111,20 +111,25 @@ class SqlAlchemyMaterialGateway:
                 )
             if resume_id is None:
                 resume = ResumeModel(
-                    id=str(uuid4()), name=normalized_name[:300], created_at=now, updated_at=now
+                    id=str(uuid4()), name=normalized_name[:300], series_type="base",
+                    parent_resume_id=None, direction_label=None, created_at=now, updated_at=now
                 )
                 session.add(resume)
                 session.flush()
+                source_version = None
             else:
                 resume = session.get(ResumeModel, resume_id)
                 if resume is None:
                     raise EntityNotFoundError("Resume series was not found.")
+                source_version = self._latest_resume_series_version(session, resume.id)
                 resume.updated_at = now
             draft = MaterialDraftModel(
                 id=str(uuid4()),
                 resume_id=resume.id,
                 job_post_id=post.id,
                 job_post_version_id=job_version.id,
+                source_resume_version_id=source_version.id if source_version else None,
+                resume_direction_selection_id=None,
                 job_title_snapshot=post.title,
                 company_name_snapshot=company.canonical_name,
                 material_type=material_type.value,
@@ -140,6 +145,8 @@ class SqlAlchemyMaterialGateway:
                 resume_id=resume.id,
                 material_draft_id=draft.id,
                 parent_version_id=None,
+                source_resume_version_id=source_version.id if source_version else None,
+                version_scope="job_tailored",
                 version_number=1,
                 status=VersionStatus.DRAFT.value,
                 title=self._title(post, material_type, facts),
@@ -178,7 +185,11 @@ class SqlAlchemyMaterialGateway:
                 {
                     "id": resume.id,
                     "name": resume.name,
+                    "series_type": resume.series_type,
+                    "parent_resume_id": resume.parent_resume_id,
+                    "direction_label": resume.direction_label,
                     "material_count": material_count,
+                    "latest_version": self._resume_series_version_summary(session, resume.id),
                     "created_at": self._utc(resume.created_at),
                     "updated_at": self._utc(resume.updated_at),
                 }
@@ -195,6 +206,113 @@ class SqlAlchemyMaterialGateway:
     def get_material(self, material_id: str) -> dict[str, Any]:
         with self._session_factory() as session:
             return self._material_view(session, self._draft(session, material_id))
+
+    def fork_resume(
+        self,
+        material_id: str,
+        *,
+        series_type: str,
+        name: str,
+        parent_resume_id: str | None,
+        direction_label: str | None,
+    ) -> dict[str, Any]:
+        if series_type not in {"base", "direction"}:
+            raise ValueError("只支持保存为基础简历或方向简历。")
+        now = datetime.now(UTC)
+        with self._session_factory() as session:
+            draft = self._draft(session, material_id)
+            source = self._latest_version(session, draft.id)
+            if source.status not in {VersionStatus.REVIEWED.value, VersionStatus.FINAL.value}:
+                raise CareerDomainError(
+                    "只有审查通过的材料才能保存为可复用简历。",
+                    code="resume_fork_review_required",
+                )
+            normalized_name = name.strip()
+            if not normalized_name:
+                raise CareerDomainError("简历名称不能为空。", code="empty_resume_name")
+            parent = None
+            parent_version = None
+            if series_type == "direction":
+                parent = session.get(ResumeModel, parent_resume_id) if parent_resume_id else None
+                if parent is None or parent.series_type != "base":
+                    raise CareerDomainError(
+                        "方向简历必须关联一个基础简历系列。",
+                        code="direction_parent_required",
+                    )
+                if not (direction_label or "").strip():
+                    raise CareerDomainError(
+                        "方向简历必须填写方向名称。", code="direction_label_required"
+                    )
+                parent_version = self._latest_resume_series_version(session, parent.id)
+                if parent_version is None:
+                    raise CareerDomainError(
+                        "基础简历尚无可用版本。", code="base_resume_version_required"
+                    )
+            elif parent_resume_id is not None:
+                raise ValueError("基础简历不能设置父系列。")
+            resume = ResumeModel(
+                id=str(uuid4()),
+                name=normalized_name[:300],
+                series_type=series_type,
+                parent_resume_id=parent.id if parent else None,
+                direction_label=(direction_label or "").strip()[:120] or None,
+                created_at=now,
+                updated_at=now,
+            )
+            session.add(resume)
+            session.flush()
+            version = self._clone_standalone_version(
+                session,
+                source=source,
+                lineage_source=parent_version or source,
+                resume=resume,
+                scope=series_type,
+                now=now,
+            )
+            session.commit()
+            return self._resume_view(session, resume, version)
+
+    def diff_versions(self, from_version_id: str, to_version_id: str) -> dict[str, Any]:
+        with self._session_factory() as session:
+            before = session.get(ResumeVersionModel, from_version_id)
+            after = session.get(ResumeVersionModel, to_version_id)
+            if before is None or after is None:
+                raise EntityNotFoundError("Resume version was not found.")
+            before_blocks = self._diff_blocks(session, before)
+            after_blocks = self._diff_blocks(session, after)
+            before_by_id = {item["id"]: item for item in before_blocks}
+            after_by_id = {item["id"]: item for item in after_blocks}
+            changes = []
+            for block_id in dict.fromkeys([*before_by_id, *after_by_id]):
+                old = before_by_id.get(block_id)
+                new = after_by_id.get(block_id)
+                if old is None:
+                    change = "added"
+                elif new is None:
+                    change = "removed"
+                elif old == new:
+                    change = "unchanged"
+                else:
+                    change = "changed"
+                changes.append(
+                    {"block_id": block_id, "change": change, "before": old, "after": new}
+                )
+            before_facts = {fact_id for item in before_blocks for fact_id in item["fact_ids"]}
+            after_facts = {fact_id for item in after_blocks for fact_id in item["fact_ids"]}
+            counts = {
+                key: sum(item["change"] == key for item in changes)
+                for key in ("added", "removed", "changed", "unchanged")
+            }
+            return {
+                "from_version": self._version_summary(before),
+                "to_version": self._version_summary(after),
+                "summary": counts,
+                "fact_changes": {
+                    "added_fact_ids": sorted(after_facts - before_facts),
+                    "removed_fact_ids": sorted(before_facts - after_facts),
+                },
+                "blocks": changes,
+            }
 
     def edit_material(
         self, material_id: str, *, expected_version: int, blocks: list[dict[str, str]]
@@ -216,6 +334,8 @@ class SqlAlchemyMaterialGateway:
                 resume_id=draft.resume_id,
                 material_draft_id=draft.id,
                 parent_version_id=parent.id,
+                source_resume_version_id=parent.source_resume_version_id,
+                version_scope=parent.version_scope,
                 version_number=parent.version_number + 1,
                 status=VersionStatus.DRAFT.value,
                 title=parent.title,
@@ -265,6 +385,7 @@ class SqlAlchemyMaterialGateway:
             draft.status = version.status
             draft.version += 1
             draft.updated_at = now
+            self._clear_strategy_stale(draft)
             session.commit()
             return self._material_view(session, draft)
 
@@ -640,13 +761,20 @@ class SqlAlchemyMaterialGateway:
     def _summary(self, session: Session, draft: MaterialDraftModel) -> dict[str, Any]:
         post = session.get(JobPostModel, draft.job_post_id)
         version = self._latest_version(session, draft.id)
+        resume = session.get(ResumeModel, draft.resume_id)
         return {
             "id": draft.id,
             "resume_id": draft.resume_id,
-            "name": session.get(ResumeModel, draft.resume_id).name,
+            "name": resume.name,
+            "resume_series_type": resume.series_type,
+            "source_resume_version_id": draft.source_resume_version_id,
+            "resume_direction_selection_id": draft.resume_direction_selection_id,
             "material_type": draft.material_type,
             "status": draft.status,
             "version": draft.version,
+            "strategy_stale": bool(draft.strategy_stale),
+            "strategy_stale_reason": draft.strategy_stale_reason,
+            "strategy_stale_at": self._utc(draft.strategy_stale_at),
             "job_post_id": post.id,
             "job_post_version_id": draft.job_post_version_id,
             "job_title": draft.job_title_snapshot,
@@ -691,6 +819,8 @@ class SqlAlchemyMaterialGateway:
         return {
             "id": version.id,
             "parent_version_id": version.parent_version_id,
+            "source_resume_version_id": version.source_resume_version_id,
+            "version_scope": version.version_scope,
             "version_number": version.version_number,
             "status": version.status,
             "title": version.title,
@@ -699,6 +829,115 @@ class SqlAlchemyMaterialGateway:
             "created_at": SqlAlchemyMaterialGateway._utc(version.created_at),
             "finalized_at": SqlAlchemyMaterialGateway._utc(version.finalized_at),
         }
+
+    def _clone_standalone_version(
+        self,
+        session: Session,
+        *,
+        source: ResumeVersionModel,
+        lineage_source: ResumeVersionModel,
+        resume: ResumeModel,
+        scope: str,
+        now: datetime,
+    ) -> ResumeVersionModel:
+        version = ResumeVersionModel(
+            id=str(uuid4()),
+            resume_id=resume.id,
+            material_draft_id=None,
+            parent_version_id=None,
+            source_resume_version_id=lineage_source.id,
+            version_scope=scope,
+            version_number=1,
+            status=VersionStatus.REVIEWED.value,
+            title=source.title,
+            content_json="[]",
+            rendered_text=source.rendered_text,
+            content_hash="",
+            fact_set_hash=source.fact_set_hash,
+            created_at=now,
+            finalized_at=None,
+        )
+        session.add(version)
+        session.flush()
+        old_snapshots = session.scalars(
+            select(FactSnapshotModel).where(FactSnapshotModel.resume_version_id == source.id)
+        ).all()
+        snapshot_map: dict[str, FactSnapshotModel] = {}
+        for old in old_snapshots:
+            new = FactSnapshotModel(
+                id=str(uuid4()),
+                resume_version_id=version.id,
+                fact_id=old.fact_id,
+                fact_version=old.fact_version,
+                category=old.category,
+                field_key=old.field_key,
+                value=old.value,
+                created_at=now,
+            )
+            session.add(new)
+            snapshot_map[old.id] = new
+        session.flush()
+        payload = []
+        for block in json.loads(source.content_json):
+            snapshot_ids = [snapshot_map[item].id for item in block["fact_snapshot_ids"]]
+            payload.append({**block, "fact_snapshot_ids": snapshot_ids})
+            for snapshot_id in snapshot_ids:
+                session.add(
+                    FactReferenceModel(
+                        id=str(uuid4()),
+                        resume_version_id=version.id,
+                        fact_snapshot_id=snapshot_id,
+                        block_id=block["id"],
+                    )
+                )
+        version.content_json = json.dumps(payload, ensure_ascii=False)
+        version.content_hash = hashlib.sha256(version.content_json.encode("utf-8")).hexdigest()
+        session.flush()
+        return version
+
+    def _resume_series_version_summary(
+        self, session: Session, resume_id: str
+    ) -> dict[str, Any] | None:
+        version = self._latest_resume_series_version(session, resume_id)
+        return None if version is None else self._version_summary(version)
+
+    def _resume_view(
+        self, session: Session, resume: ResumeModel, version: ResumeVersionModel
+    ) -> dict[str, Any]:
+        material_count = session.scalar(
+            select(func.count()).select_from(MaterialDraftModel).where(
+                MaterialDraftModel.resume_id == resume.id
+            )
+        )
+        return {
+            "id": resume.id,
+            "name": resume.name,
+            "series_type": resume.series_type,
+            "parent_resume_id": resume.parent_resume_id,
+            "direction_label": resume.direction_label,
+            "material_count": material_count,
+            "latest_version": self._version_summary(version),
+            "created_at": self._utc(resume.created_at),
+            "updated_at": self._utc(resume.updated_at),
+        }
+
+    @staticmethod
+    def _diff_blocks(session: Session, version: ResumeVersionModel) -> list[dict[str, Any]]:
+        snapshots = {
+            item.id: item
+            for item in session.scalars(
+                select(FactSnapshotModel).where(FactSnapshotModel.resume_version_id == version.id)
+            ).all()
+        }
+        return [
+            {
+                "id": item["id"],
+                "section": item["section"],
+                "text": item["text"],
+                "fact_ids": [snapshots[sid].fact_id for sid in item["fact_snapshot_ids"]],
+            }
+            for item in json.loads(version.content_json)
+        ]
 
     @staticmethod
     def _export_view(export: MaterialExportModel) -> dict[str, Any]:
@@ -769,6 +1008,26 @@ class SqlAlchemyMaterialGateway:
         )
 
     @staticmethod
+    def _latest_resume_series_version(
+        session: Session, resume_id: str
+    ) -> ResumeVersionModel | None:
+        reusable = session.scalar(
+            select(ResumeVersionModel)
+            .where(
+                ResumeVersionModel.resume_id == resume_id,
+                ResumeVersionModel.version_scope.in_(["base", "direction"]),
+            )
+            .order_by(ResumeVersionModel.created_at.desc())
+        )
+        if reusable is not None:
+            return reusable
+        return session.scalar(
+            select(ResumeVersionModel)
+            .where(ResumeVersionModel.resume_id == resume_id)
+            .order_by(ResumeVersionModel.created_at.desc())
+        )
+
+    @staticmethod
     def _draft(session: Session, material_id: str) -> MaterialDraftModel:
         draft = session.get(MaterialDraftModel, material_id)
         if draft is None:
@@ -783,3 +1042,9 @@ class SqlAlchemyMaterialGateway:
             raise CareerDomainError(
                 "Final materials are immutable.", code="final_material_immutable"
             )
+
+    @staticmethod
+    def _clear_strategy_stale(draft: MaterialDraftModel) -> None:
+        draft.strategy_stale = 0
+        draft.strategy_stale_reason = None
+        draft.strategy_stale_at = None

@@ -25,6 +25,9 @@ from nanobot.career.infrastructure.database.models import (
     CompanyModel,
     JobPostModel,
     JobPostVersionModel,
+    MailIntelligenceAnalysisModel,
+    MailIntelligenceItemModel,
+    MailMessageModel,
     MaterialDraftModel,
     MaterialExportModel,
     ResumeModel,
@@ -34,6 +37,10 @@ from nanobot.career.infrastructure.database.models import (
 from nanobot.career.infrastructure.database.profile_gateway import (
     EntityNotFoundError,
     VersionConflictError,
+)
+from nanobot.career.infrastructure.database.review_runtime import (
+    ensure_review_task,
+    set_review_resolution,
 )
 
 
@@ -48,6 +55,8 @@ class SqlAlchemyApplicationGateway:
                 select(ApplicationModel).where(ApplicationModel.job_post_id == job_post_id)
             )
             if existing is not None:
+                self._link_mail_to_application(session, existing)
+                session.commit()
                 return self._view(session, existing)
             post = session.get(JobPostModel, job_post_id)
             if post is None:
@@ -110,6 +119,7 @@ class SqlAlchemyApplicationGateway:
                 source="system",
                 idempotency_key=f"initialize:{application.id}",
             )
+            self._link_mail_to_application(session, application)
             session.commit()
             return self._view(session, application)
 
@@ -298,20 +308,20 @@ class SqlAlchemyApplicationGateway:
             )
             session.add(proposal)
             session.flush()
-            task = ReviewTaskModel(
-                id=str(uuid4()),
+            task = ensure_review_task(
+                session,
                 task_type="application_event_proposal",
                 entity_type="application_event_proposal",
                 entity_id=proposal.id,
-                status="open",
-                version=1,
-                created_at=now,
-                resolved_at=None,
-                resolution=None,
-                resolution_reason=None,
-                resolved_by=None,
+                title=(
+                    f"确认申请进度：{application.company_name_snapshot} · "
+                    f"{application.job_title_snapshot}"
+                ),
+                summary=proposal.note,
+                source_type=source,
+                priority=30,
+                now=now,
             )
-            session.add(task)
             try:
                 session.commit()
             except IntegrityError:
@@ -426,12 +436,12 @@ class SqlAlchemyApplicationGateway:
             proposal.version += 1
             proposal.resolution_reason = reason.strip()
             proposal.resolved_at = now
-            task.status = "resolved"
-            task.version += 1
-            task.resolved_at = now
-            task.resolution = resolution
-            task.resolution_reason = reason.strip()
-            task.resolved_by = "user"
+            set_review_resolution(
+                task,
+                now=now,
+                resolution=resolution,
+                reason=reason.strip(),
+            )
             session.commit()
             return self._proposal_view(session, proposal, application, task)
 
@@ -553,6 +563,16 @@ class SqlAlchemyApplicationGateway:
             raise EntityNotFoundError("Application was not found.")
         return application
 
+    @staticmethod
+    def _link_mail_to_application(session: Session, application: ApplicationModel) -> None:
+        analyses = session.scalars(select(MailIntelligenceAnalysisModel).where(
+            MailIntelligenceAnalysisModel.job_post_id == application.job_post_id,
+            MailIntelligenceAnalysisModel.application_id.is_(None),
+        )).all()
+        for analysis in analyses:
+            analysis.application_id = application.id
+            analysis.updated_at = datetime.now(UTC)
+
     def _view(self, session: Session, application: ApplicationModel) -> dict[str, Any]:
         result = self._summary(session, application)
         events = session.scalars(
@@ -577,6 +597,11 @@ class SqlAlchemyApplicationGateway:
                 MaterialDraftModel.status == "final",
             )
         ).all()
+        mail_analyses = session.scalars(
+            select(MailIntelligenceAnalysisModel)
+            .where(MailIntelligenceAnalysisModel.application_id == application.id)
+            .order_by(MailIntelligenceAnalysisModel.created_at.desc())
+        ).all()
         result.update(
             {
                 "events": [self._event_view(item, item.id in superseded_ids) for item in events],
@@ -590,9 +615,41 @@ class SqlAlchemyApplicationGateway:
                     }
                     for item in available
                 ],
+                "mail_evidence": [self._mail_evidence_view(session, item) for item in mail_analyses],
             }
         )
         return result
+
+    def _mail_evidence_view(
+        self, session: Session, analysis: MailIntelligenceAnalysisModel
+    ) -> dict[str, Any]:
+        message = session.get(MailMessageModel, analysis.mail_message_id)
+        items = session.scalars(
+            select(MailIntelligenceItemModel)
+            .where(MailIntelligenceItemModel.analysis_id == analysis.id)
+            .order_by(MailIntelligenceItemModel.created_at, MailIntelligenceItemModel.id)
+        ).all()
+        return {
+            "analysis_id": analysis.id,
+            "message_id": analysis.mail_message_id,
+            "agent_run_id": analysis.agent_run_id,
+            "sender": message.sender if message else "",
+            "subject": message.subject if message else "",
+            "sent_at": self._utc(message.sent_at) if message else None,
+            "message_type": analysis.message_type,
+            "summary": analysis.summary,
+            "match_confidence": analysis.match_confidence,
+            "items": [
+                {
+                    "id": item.id, "item_type": item.item_type, "category": item.category,
+                    "title": item.title, "details": item.details, "evidence": item.evidence,
+                    "occurred_at": self._utc(item.occurred_at),
+                    "scheduled_at": self._utc(item.scheduled_at), "status": item.status,
+                }
+                for item in items
+            ],
+            "created_at": self._utc(analysis.created_at),
+        }
 
     def _summary(self, session: Session, application: ApplicationModel) -> dict[str, Any]:
         material_count = len(

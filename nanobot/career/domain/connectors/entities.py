@@ -70,3 +70,23 @@ def boss_external_id(url: str) -> str:
     if not value:
         raise ValueError("BOSS 岗位缺少外部 ID。")
     return value
+
+
+def validate_nowcoder_lookback(days: int, *, scheduled: bool = False) -> int:
+    if days not in {0, 7, 14, 30}:
+        raise ValueError("牛客历史范围只能选择当天、最近 7、14 或 30 天。")
+    if scheduled and days != 0:
+        raise ValueError("牛客自动同步只能获取中国时间当天的数据。")
+    return days
+
+
+def nowcoder_external_id(value: str, source_url: str) -> str:
+    external_id = value.strip()
+    if not external_id or len(external_id) > 300 or any(char in external_id for char in "\r\n\0"):
+        raise ValueError("牛客日程外部 ID 无效。")
+    parsed = urlparse(source_url)
+    if parsed.scheme != "https" or parsed.hostname not in {"www.nowcoder.com", "nowcoder.com"}:
+        raise ValueError("牛客日程来源 URL 无效。")
+    if not parsed.path.startswith("/enterprise/"):
+        raise ValueError("牛客日程来源 URL 路径无效。")
+    return external_id

@@ -36,6 +36,8 @@ class NanobotProfileFactExtractor:
     def __init__(self, provider: LLMProvider, *, model: str | None = None) -> None:
         self.provider = provider
         self.model = model or provider.get_default_model()
+        self.last_usage: dict[str, int] = {}
+        self.last_retry_count = 0
 
     def extract(self, *, document_id: str, text: str) -> list[ExtractedFact]:
         return asyncio.run(self._extract(document_id=document_id, text=text))
@@ -59,6 +61,7 @@ class NanobotProfileFactExtractor:
             temperature=0.1,
             retry_mode="standard",
         )
+        self.last_usage = dict(response.usage)
         if response.finish_reason == "error" or not response.content or response.tool_calls:
             raise CareerDomainError(
                 "Fact extraction model did not return a valid tool-free response.",

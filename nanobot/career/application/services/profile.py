@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from time import perf_counter
 from typing import Any, Protocol
 
 from nanobot.career.application.ports import FactExtractor, ProfileGateway
@@ -59,9 +60,11 @@ class ProfileApplicationService:
 
     def _save(self, *, parsed: ParsedDocumentLike, raw_content: bytes) -> dict[str, Any]:
         blob = self.blob_store.put(raw_content)
+        started = perf_counter()
         try:
             facts = self.extractor.extract(document_id=blob.sha256, text=parsed.text)
         except CareerDomainError as exc:
+            audit = self._audit_metadata(started)
             self.gateway.save_import(
                 file_name=parsed.file_name,
                 media_type=parsed.media_type,
@@ -75,8 +78,10 @@ class ProfileApplicationService:
                 facts=[],
                 run_status="failed",
                 error_code=exc.code,
+                **audit,
             )
             raise
+        audit = self._audit_metadata(started)
         return self.gateway.save_import(
             file_name=parsed.file_name,
             media_type=parsed.media_type,
@@ -88,4 +93,18 @@ class ProfileApplicationService:
             extractor_name=self.extractor.name,
             extractor_schema_version=self.extractor.schema_version,
             facts=facts,
+            **audit,
         )
+
+    def _audit_metadata(self, started: float) -> dict[str, Any]:
+        provider = getattr(self.extractor, "provider", None)
+        usage = getattr(self.extractor, "last_usage", {}) or {}
+        return {
+            "provider": type(provider).__name__ if provider is not None else "local",
+            "model": getattr(self.extractor, "model", None),
+            "prompt_version": "profile_fact_extraction.v1",
+            "duration_ms": max(0, round((perf_counter() - started) * 1000)),
+            "input_tokens": usage.get("prompt_tokens") or usage.get("input_tokens"),
+            "output_tokens": usage.get("completion_tokens") or usage.get("output_tokens"),
+            "retry_count": int(getattr(self.extractor, "last_retry_count", 0)),
+        }

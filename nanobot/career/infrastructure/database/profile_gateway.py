@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
@@ -13,14 +15,19 @@ from nanobot.career.application.ports.fact_extractor import ExtractedFact
 from nanobot.career.domain.common.errors import CareerDomainError
 from nanobot.career.domain.profile.entities import CandidateFact, FactCategory, FactStatus
 from nanobot.career.infrastructure.database.models import (
-    AgentRunModel,
     BlobModel,
     CandidateFactModel,
     CandidateProfileModel,
     DocumentModel,
     FactRevisionModel,
     FactSourceModel,
+    ProfileChangeEventModel,
     ReviewTaskModel,
+)
+from nanobot.career.infrastructure.database.review_runtime import (
+    create_agent_run,
+    ensure_review_task,
+    set_review_resolution,
 )
 
 PROFILE_ID = "00000000-0000-4000-8000-000000000001"
@@ -60,6 +67,13 @@ class SqlAlchemyProfileGateway:
         facts: list[ExtractedFact],
         run_status: str = "succeeded",
         error_code: str | None = None,
+        provider: str | None = None,
+        model: str | None = None,
+        prompt_version: str | None = None,
+        duration_ms: int | None = None,
+        input_tokens: int | None = None,
+        output_tokens: int | None = None,
+        retry_count: int = 0,
     ) -> dict[str, Any]:
         now = datetime.now(UTC)
         with self._session_factory() as session:
@@ -103,8 +117,26 @@ class SqlAlchemyProfileGateway:
             # flush principals explicitly so SQLite foreign keys never depend
             # on mapper ordering heuristics.
             session.flush()
-            run = AgentRunModel(
-                id=str(uuid4()),
+            output_payload = [
+                {
+                    "category": item.category.value,
+                    "field_key": item.field_key,
+                    "value": item.value,
+                    "evidence_text": item.evidence_text,
+                    "confidence": item.confidence,
+                }
+                for item in facts
+            ]
+            output_hash = hashlib.sha256(
+                json.dumps(
+                    output_payload,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            ).hexdigest()
+            run = create_agent_run(
+                session,
                 task_type="profile_fact_extraction",
                 implementation=extractor_name,
                 schema_version=extractor_schema_version,
@@ -114,8 +146,20 @@ class SqlAlchemyProfileGateway:
                 error_code=error_code,
                 created_at=now,
                 finished_at=now,
+                provider=provider,
+                model=model,
+                prompt_version=prompt_version,
+                input_entity_type="document",
+                input_entity_id=document.id,
+                input_revision=sha256,
+                input_hash=sha256,
+                output_hash=output_hash,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                duration_ms=duration_ms,
+                retry_count=retry_count,
+                sensitivity="sensitive",
             )
-            session.add(run)
             if run_status != "succeeded":
                 session.commit()
                 return self._document_view(session, document, duplicate=False)
@@ -146,16 +190,17 @@ class SqlAlchemyProfileGateway:
                     )
                     session.add(existing_fact)
                     session.flush()
-                    session.add(
-                        ReviewTaskModel(
-                            id=str(uuid4()),
-                            task_type="candidate_fact_review",
-                            entity_type="candidate_fact",
-                            entity_id=existing_fact.id,
-                            status="open",
-                            version=1,
-                            created_at=now,
-                        )
+                    ensure_review_task(
+                        session,
+                        task_type="candidate_fact_review",
+                        entity_type="candidate_fact",
+                        entity_id=existing_fact.id,
+                        title=f"确认职业事实：{extracted.value[:200]}",
+                        summary=extracted.evidence_text,
+                        source_type="agent_extraction",
+                        priority=20,
+                        agent_run_id=run.id,
+                        now=now,
                     )
                     created_count += 1
                 session.add(
@@ -273,16 +318,20 @@ class SqlAlchemyProfileGateway:
                     created_at=now,
                 )
             )
-            session.add(
-                ReviewTaskModel(
-                    id=str(uuid4()),
-                    task_type="candidate_fact_review",
-                    entity_type="candidate_fact",
-                    entity_id=fact.id,
-                    status="open",
-                    version=1,
-                    created_at=now,
-                )
+            ensure_review_task(
+                session,
+                task_type="candidate_fact_review",
+                entity_type="candidate_fact",
+                entity_id=fact.id,
+                title=f"确认手动职业事实：{fact.value[:200]}",
+                summary=source_note,
+                source_type="manual",
+                priority=10,
+                now=now,
+            )
+            self._add_profile_change(
+                session, fact, event_type="fact_proposed", changed_fields={"status": "proposed"},
+                impact_scopes=["profile_review"], source="user", now=now,
             )
             session.commit()
             return self._fact_view(session, fact)
@@ -365,18 +414,38 @@ class SqlAlchemyProfileGateway:
             )
             if task is not None:
                 if after.status in {FactStatus.CONFIRMED, FactStatus.REJECTED}:
-                    task.status = "resolved"
-                    task.resolved_at = now
+                    set_review_resolution(
+                        task,
+                        now=now,
+                        resolution=after.status.value,
+                        reason=reason,
+                    )
                 else:
-                    task.status = "open"
-                    task.resolved_at = None
-                task.version += 1
+                    set_review_resolution(
+                        task,
+                        now=now,
+                        resolution=None,
+                        reason=reason,
+                        reopen=True,
+                    )
             if after.status is FactStatus.CONFIRMED and after.field_key == "name":
                 profile = session.get(CandidateProfileModel, after.profile_id)
                 if profile is not None:
                     profile.display_name = after.value
                     profile.version += 1
                     profile.updated_at = now
+            self._add_profile_change(
+                session, row, event_type=f"fact_{action}",
+                changed_fields={
+                    "previous_status": before.status.value, "status": after.status.value,
+                    "previous_value": before.value, "value": after.value,
+                },
+                impact_scopes=(
+                    ["profile", "job_fit", "material_strategy", "career_strategy"]
+                    if after.status is FactStatus.CONFIRMED else ["profile_review"]
+                ),
+                source="user", now=now, revision=after.version,
+            )
             session.commit()
             refreshed = session.get(CandidateFactModel, fact_id)
             if refreshed is None:
@@ -427,15 +496,24 @@ class SqlAlchemyProfileGateway:
                     )
                 )
                 if task is not None:
-                    task.status = "resolved"
-                    task.resolved_at = now
-                    task.version += 1
+                    set_review_resolution(
+                        task,
+                        now=now,
+                        resolution="confirmed",
+                        reason="Batch confirmed by user",
+                    )
                 if after.field_key == "name":
                     profile = session.get(CandidateProfileModel, after.profile_id)
                     if profile is not None:
                         profile.display_name = after.value
                         profile.version += 1
                         profile.updated_at = now
+                self._add_profile_change(
+                    session, row, event_type="fact_confirm",
+                    changed_fields={"previous_status": before.status.value, "status": "confirmed"},
+                    impact_scopes=["profile", "job_fit", "material_strategy", "career_strategy"],
+                    source="user", now=now, revision=after.version,
+                )
             session.commit()
             return [self._fact_view(session, row) for row, _before, _after in changes]
 
@@ -458,6 +536,21 @@ class SqlAlchemyProfileGateway:
     @staticmethod
     def _normalize(value: str) -> str:
         return " ".join(value.casefold().split())
+
+    @staticmethod
+    def _add_profile_change(
+        session: Session, fact: CandidateFactModel, *, event_type: str,
+        changed_fields: dict[str, Any], impact_scopes: list[str], source: str,
+        now: datetime, revision: int | None = None,
+    ) -> None:
+        session.add(ProfileChangeEventModel(
+            id=str(uuid4()), profile_id=fact.profile_id, event_type=event_type,
+            entity_type="candidate_fact", entity_id=fact.id,
+            entity_revision=revision or fact.version,
+            changed_fields_json=json.dumps(changed_fields, ensure_ascii=False),
+            impact_scopes_json=json.dumps(impact_scopes, ensure_ascii=False),
+            source=source, occurred_at=now,
+        ))
 
     @staticmethod
     def _to_domain(row: CandidateFactModel) -> CandidateFact:

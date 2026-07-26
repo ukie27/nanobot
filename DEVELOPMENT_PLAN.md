@@ -197,7 +197,7 @@ CLI：
 
 - 不实现 Candidate、Job、Application 业务。
 - 不接入 OpenCLI、IMAP 或模型任务。
-- 不删除现有 Agent、Channel、MCP 等框架能力。
+- 本 Part 不提前删除尚有启动引用的旧 Runtime；后续按 Career-only 迁移计划逐项替换并删除，不保留长期双轨。
 - 不做最终 UI 视觉系统。
 
 ### 4.4 自动化测试
@@ -279,8 +279,8 @@ Web UI：
 ### 5.3 现有代码处理
 
 - 保留现有 Agent Provider/Runner 能力并通过 `AgentTaskPort` 调用。
-- 现有 CareerStore 不继续扩表。
-- 新事实库稳定前不立即删除旧 CareerStore。
+- 现有 CareerStore 不继续扩表，也不保留旧数据或开发迁移逻辑。
+- 新 Domain 路径覆盖运行引用和测试后，直接删除旧 CareerStore、Resume Service 和重复 Tool。
 - 如果发现真实旧简历数据，提供导入；确认无数据和调用后再清理旧实现。
 
 ### 5.4 不做
@@ -653,24 +653,26 @@ Web UI：
 
 OpenCLI：
 
-- OpenCLI 是本项目使用的外部应用；不在本项目内开发、修改或维护 OpenCLI 本体及其通用 Adapter。
-- 本项目只实现 Career 侧的受控调用、输出校验和业务数据映射。
+- OpenCLI 是本项目使用的外部应用；不修改或维护 OpenCLI 本体及其内置通用 Adapter。
+- 目标站点缺少命令时，在本项目内维护可独立安装的只读 Plugin；Career 侧负责受控调用、输出校验和业务数据映射。
 
 - `OpenCliProcessRunner`。
 - executable/version/Node/Bridge doctor。
 - Career Adapter Descriptor。
-- BOSS status、login、latest、detail 映射。
+- 牛客 `schedule` 作为默认每日招聘信息入口；自动任务仅获取中国时间当天。
+- 牛客最近 7/14/30 天只允许用户主动获取，最大范围 30 天。
+- BOSS status、login、latest、detail 作为可选定向岗位来源保留。
 - 一个 Browser Profile alias。
 - foreground 登录、background read scan。
 - OpenCLI exit code 映射。
 - 命令 allowlist，禁止 BOSS 写操作。
 
-岗位处理：
+机会与岗位处理：
 
-- SourceEvent 到 JobPost/Version。
+- 牛客 SourceEvent 到 RecruitmentOpportunity/Version；BOSS 等具体 JD 来源才进入 JobPost/Version。
 - 外部 ID、URL 和内容哈希去重。
 - 登录失效、空结果、Schema 错误和 Adapter 退化。
-- 手动扫描和 09:00/18:00 可配置 Schedule。
+- 牛客支持每日可配置 Schedule；BOSS 仅保留手动定向扫描。
 
 Web UI：
 
@@ -695,7 +697,7 @@ Web UI：
 - 相同扫描重复执行幂等。
 - 岗位更新形成版本。
 - 登录失效只影响该 Connector。
-- Schema 错误不写正式 JobPost。
+- Schema 错误不写正式 Opportunity 或 JobPost。
 - Profile 并发锁。
 
 ### 10.5 用户验收流程
@@ -1016,11 +1018,11 @@ part-9-release-accepted
 1. Career Web 主 Server 使用 FastAPI。
 2. 前端使用 React + TypeScript + Vite。
 3. Career 数据库使用 SQLite + SQLAlchemy + Alembic。
-4. 继续在现有 `nanobot/` 包内增加 `career` 分层，不整体重写 Agent 框架。
+4. 以现有 `nanobot/` 为源码基础建设 Career-only Runtime；允许重写和删除不符合产品目标的 Agent 框架模块。
 5. 每部分必须经过用户实际使用验收后再推进。
 6. P0 招聘网站为 BOSS，邮箱为一个标准 IMAP 账户。
 7. Part 3 首要导出格式为 PDF；DOCX 和录音转写不阻塞第一轮闭环。
 
 ## 18. 推荐的当前下一步
 
-Part 0–9 的计划内功能现已全部进入实现完成状态，下一步按照用户指令统一进入实际测试与修复。测试顺序为：隔离临时数据目录中的迁移与 API 自动化测试、Part 1–9 分模块 Web 验收、真实只读邮箱和外部 OpenCLI 联调、完整备份恢复与删除演练、长时间运行及发布检查。外部 OpenCLI 仍只消费，不在本项目开发；目标网站专用 CLI 也必须在用户明确目标网站与范围后另立项目开发。
+Phase D 四条纵向链路已完成：岗位证据匹配、Resume Direction Planner、`resume_draft.v2` Drafter 与独立 `material_review.v2` Reviewer，以及基础 → 方向 → 岗位定制 ResumeVersion 血缘和块级/Fact 级差异页均已贯通。Agent 输出仍是 Proposal，确认事务保留 FactSnapshot、FactReference、确定性 Review、Final 不可变和 PDF 验证。下一步进入真实配置与人工验收并按问题修复。外部 OpenCLI 仍只消费，不在本项目开发。

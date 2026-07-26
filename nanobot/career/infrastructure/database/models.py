@@ -114,6 +114,9 @@ class SourceEventModel(Base):
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     error_code: Mapped[str | None] = mapped_column(String(120))
     job_post_id: Mapped[str | None] = mapped_column(ForeignKey("job_posts.id", ondelete="SET NULL"))
+    opportunity_id: Mapped[str | None] = mapped_column(
+        ForeignKey("recruitment_opportunities.id", ondelete="SET NULL")
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     __table_args__ = (
@@ -208,6 +211,64 @@ class MailApplicationCandidateModel(Base):
     __table_args__ = (Index("ix_mail_candidates_review", "status", "created_at"),)
 
 
+class MailIntelligenceAnalysisModel(Base):
+    __tablename__ = "mail_intelligence_analyses"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    mail_message_id: Mapped[str] = mapped_column(
+        ForeignKey("mail_messages.id", ondelete="CASCADE"), nullable=False, unique=True
+    )
+    agent_run_id: Mapped[str] = mapped_column(
+        ForeignKey("agent_runs.id", ondelete="RESTRICT"), nullable=False, unique=True
+    )
+    schema_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    relevance: Mapped[str] = mapped_column(String(32), nullable=False)
+    message_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    summary: Mapped[str] = mapped_column(Text, nullable=False)
+    company: Mapped[str | None] = mapped_column(String(300))
+    job_title: Mapped[str | None] = mapped_column(String(300))
+    application_reference: Mapped[str | None] = mapped_column(String(100))
+    application_id: Mapped[str | None] = mapped_column(
+        ForeignKey("applications.id", ondelete="SET NULL")
+    )
+    job_post_id: Mapped[str | None] = mapped_column(
+        ForeignKey("job_posts.id", ondelete="SET NULL")
+    )
+    match_confidence: Mapped[float] = mapped_column(Float, nullable=False)
+    match_reason: Mapped[str] = mapped_column(String(500), nullable=False)
+    create_record_recommended: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    input_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    output_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    __table_args__ = (Index("ix_mail_analysis_relevance", "relevance", "created_at"),)
+
+
+class MailIntelligenceItemModel(Base):
+    __tablename__ = "mail_intelligence_items"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    analysis_id: Mapped[str] = mapped_column(
+        ForeignKey("mail_intelligence_analyses.id", ondelete="CASCADE"), nullable=False
+    )
+    item_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    category: Mapped[str] = mapped_column(String(64), nullable=False)
+    status_candidate: Mapped[str | None] = mapped_column(String(32))
+    occurred_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    scheduled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    title: Mapped[str] = mapped_column(String(300), nullable=False)
+    details: Mapped[str] = mapped_column(Text, nullable=False)
+    evidence: Mapped[str] = mapped_column(Text, nullable=False)
+    confidence: Mapped[float | None] = mapped_column(Float)
+    severity: Mapped[str | None] = mapped_column(String(24))
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="pending")
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    resolution_reason: Mapped[str | None] = mapped_column(String(500))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    __table_args__ = (Index("ix_mail_intelligence_items_review", "status", "created_at"),)
+
+
 class CandidateProfileModel(Base):
     __tablename__ = "candidate_profiles"
 
@@ -217,6 +278,109 @@ class CandidateProfileModel(Base):
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class CareerPreferenceModel(Base):
+    __tablename__ = "career_preferences"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    profile_id: Mapped[str] = mapped_column(ForeignKey("candidate_profiles.id", ondelete="CASCADE"), nullable=False)
+    preference_key: Mapped[str] = mapped_column(String(100), nullable=False)
+    value_json: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(24), nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    __table_args__ = (UniqueConstraint("profile_id", "preference_key", name="uq_career_preference_key"),)
+
+
+class ProfileChangeEventModel(Base):
+    __tablename__ = "profile_change_events"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    profile_id: Mapped[str] = mapped_column(ForeignKey("candidate_profiles.id", ondelete="CASCADE"), nullable=False)
+    event_type: Mapped[str] = mapped_column(String(80), nullable=False)
+    entity_type: Mapped[str] = mapped_column(String(80), nullable=False)
+    entity_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    entity_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    changed_fields_json: Mapped[str] = mapped_column(Text, nullable=False)
+    impact_scopes_json: Mapped[str] = mapped_column(Text, nullable=False)
+    source: Mapped[str] = mapped_column(String(80), nullable=False)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    __table_args__ = (Index("ix_profile_change_events_time", "profile_id", "occurred_at"),)
+
+
+class ProfileImpactRunModel(Base):
+    __tablename__ = "profile_impact_runs"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    change_event_id: Mapped[str] = mapped_column(
+        ForeignKey("profile_change_events.id", ondelete="CASCADE"), nullable=False
+    )
+    scope: Mapped[str] = mapped_column(String(80), nullable=False)
+    status: Mapped[str] = mapped_column(String(24), nullable=False)
+    background_job_id: Mapped[str | None] = mapped_column(
+        ForeignKey("background_jobs.id", ondelete="SET NULL")
+    )
+    input_revision: Mapped[str] = mapped_column(String(100), nullable=False)
+    affected_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    error_code: Mapped[str | None] = mapped_column(String(120))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    __table_args__ = (
+        UniqueConstraint("change_event_id", "scope", name="uq_profile_impact_event_scope"),
+        Index("ix_profile_impact_runs_status", "status", "created_at"),
+    )
+
+
+class ProfileInsightProposalModel(Base):
+    __tablename__ = "profile_insight_proposals"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    profile_id: Mapped[str] = mapped_column(ForeignKey("candidate_profiles.id", ondelete="CASCADE"), nullable=False)
+    insight_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    conclusion: Mapped[str] = mapped_column(Text, nullable=False)
+    evidence_refs_json: Mapped[str] = mapped_column(Text, nullable=False)
+    counter_evidence_json: Mapped[str] = mapped_column(Text, nullable=False)
+    confidence: Mapped[float] = mapped_column(Float, nullable=False)
+    source: Mapped[str] = mapped_column(String(80), nullable=False)
+    status: Mapped[str] = mapped_column(String(24), nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    agent_run_id: Mapped[str | None] = mapped_column(ForeignKey("agent_runs.id", ondelete="SET NULL"))
+    resolution_reason: Mapped[str | None] = mapped_column(String(500))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    __table_args__ = (Index("ix_profile_insights_review", "status", "created_at"),)
+
+
+class StrategySnapshotModel(Base):
+    __tablename__ = "strategy_snapshots"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    profile_id: Mapped[str] = mapped_column(ForeignKey("candidate_profiles.id", ondelete="CASCADE"), nullable=False)
+    version_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    schema_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    period_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    period_end: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    content_json: Mapped[str] = mapped_column(Text, nullable=False)
+    evidence_refs_json: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(24), nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    resolution_reason: Mapped[str | None] = mapped_column(String(500))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    __table_args__ = (
+        UniqueConstraint("profile_id", "version_number", name="uq_strategy_snapshot_version"),
+        Index("ix_strategy_snapshots_status", "status", "created_at"),
+    )
+
+
+class DailyDigestModel(Base):
+    __tablename__ = "daily_digests"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    profile_id: Mapped[str] = mapped_column(ForeignKey("candidate_profiles.id", ondelete="CASCADE"), nullable=False)
+    digest_date: Mapped[str] = mapped_column(String(10), nullable=False)
+    schema_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    content_json: Mapped[str] = mapped_column(Text, nullable=False)
+    input_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    generated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    __table_args__ = (UniqueConstraint("profile_id", "digest_date", name="uq_daily_digest_date"),)
 
 
 class BlobModel(Base):
@@ -319,7 +483,15 @@ class ReviewTaskModel(Base):
     entity_id: Mapped[str] = mapped_column(String(36), nullable=False)
     status: Mapped[str] = mapped_column(String(24), nullable=False)
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    title: Mapped[str | None] = mapped_column(String(300))
+    summary: Mapped[str | None] = mapped_column(Text)
+    source_type: Mapped[str | None] = mapped_column(String(80))
+    priority: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    agent_run_id: Mapped[str | None] = mapped_column(
+        ForeignKey("agent_runs.id", ondelete="SET NULL")
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     resolution: Mapped[str | None] = mapped_column(String(24))
     resolution_reason: Mapped[str | None] = mapped_column(String(500))
@@ -327,6 +499,8 @@ class ReviewTaskModel(Base):
 
     __table_args__ = (
         Index("ix_review_tasks_open", "status", "task_type", "created_at"),
+        Index("ix_review_tasks_queue", "status", "priority", "created_at"),
+        Index("ix_review_tasks_agent_run", "agent_run_id"),
         UniqueConstraint("task_type", "entity_type", "entity_id", name="uq_review_task_entity"),
     )
 
@@ -336,14 +510,37 @@ class AgentRunModel(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     task_type: Mapped[str] = mapped_column(String(100), nullable=False)
+    execution_mode: Mapped[str] = mapped_column(String(24), nullable=False, default="task")
+    correlation_id: Mapped[str | None] = mapped_column(String(100))
     implementation: Mapped[str] = mapped_column(String(100), nullable=False)
+    provider: Mapped[str | None] = mapped_column(String(100))
+    model: Mapped[str | None] = mapped_column(String(200))
+    prompt_version: Mapped[str | None] = mapped_column(String(100))
+    skill_version: Mapped[str | None] = mapped_column(String(100))
     schema_version: Mapped[str] = mapped_column(String(32), nullable=False)
     document_id: Mapped[str | None] = mapped_column(ForeignKey("documents.id", ondelete="SET NULL"))
+    input_entity_type: Mapped[str | None] = mapped_column(String(80))
+    input_entity_id: Mapped[str | None] = mapped_column(String(100))
+    input_revision: Mapped[str | None] = mapped_column(String(100))
+    input_hash: Mapped[str | None] = mapped_column(String(64))
+    output_hash: Mapped[str | None] = mapped_column(String(64))
+    tool_calls_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
     status: Mapped[str] = mapped_column(String(24), nullable=False)
     output_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    input_tokens: Mapped[int | None] = mapped_column(Integer)
+    output_tokens: Mapped[int | None] = mapped_column(Integer)
+    duration_ms: Mapped[int | None] = mapped_column(Integer)
+    retry_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    sensitivity: Mapped[str] = mapped_column(String(24), nullable=False, default="private")
+    retention_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     error_code: Mapped[str | None] = mapped_column(String(100))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    __table_args__ = (
+        Index("ix_agent_runs_task_created", "task_type", "created_at"),
+        Index("ix_agent_runs_status_created", "status", "created_at"),
+    )
 
 
 class CompanyModel(Base):
@@ -363,6 +560,102 @@ class CompanyAliasModel(Base):
     alias: Mapped[str] = mapped_column(String(300), nullable=False)
     normalized_alias: Mapped[str] = mapped_column(String(300), nullable=False, unique=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class RecruitmentOpportunityModel(Base):
+    __tablename__ = "recruitment_opportunities"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    company: Mapped[str] = mapped_column(String(300), nullable=False)
+    batch: Mapped[str] = mapped_column(String(300), nullable=False)
+    cities: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    careers: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    industries: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    evaluation: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    application_starts_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    application_ends_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    announcement_url: Mapped[str | None] = mapped_column(Text)
+    application_url: Mapped[str] = mapped_column(Text, nullable=False)
+    triage_status: Mapped[str] = mapped_column(String(24), nullable=False, default="new")
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    first_collected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    last_collected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        Index("ix_opportunities_triage", "triage_status", "last_collected_at"),
+        CheckConstraint(
+            "triage_status IN ('new','following','ignored')",
+            name="ck_opportunity_triage_status",
+        ),
+    )
+
+
+class OpportunitySourceModel(Base):
+    __tablename__ = "opportunity_sources"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    opportunity_id: Mapped[str] = mapped_column(
+        ForeignKey("recruitment_opportunities.id", ondelete="CASCADE"), nullable=False
+    )
+    connector_id: Mapped[str] = mapped_column(
+        ForeignKey("connector_configs.id", ondelete="CASCADE"), nullable=False
+    )
+    external_id: Mapped[str] = mapped_column(String(300), nullable=False)
+    source_url: Mapped[str] = mapped_column(Text, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("connector_id", "external_id", name="uq_opportunity_source_external"),
+        Index("ix_opportunity_sources_opportunity", "opportunity_id"),
+    )
+
+
+class OpportunityVersionModel(Base):
+    __tablename__ = "opportunity_versions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    opportunity_id: Mapped[str] = mapped_column(
+        ForeignKey("recruitment_opportunities.id", ondelete="CASCADE"), nullable=False
+    )
+    source_event_id: Mapped[str | None] = mapped_column(
+        ForeignKey("source_events.id", ondelete="SET NULL")
+    )
+    version_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    payload_json: Mapped[str] = mapped_column(Text, nullable=False)
+    collected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "opportunity_id", "version_number", name="uq_opportunity_version_number"
+        ),
+        Index("ix_opportunity_versions_opportunity", "opportunity_id", "version_number"),
+    )
+
+
+class OpportunityJobLinkModel(Base):
+    __tablename__ = "opportunity_job_links"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    opportunity_id: Mapped[str] = mapped_column(
+        ForeignKey("recruitment_opportunities.id", ondelete="CASCADE"), nullable=False
+    )
+    job_post_id: Mapped[str] = mapped_column(
+        ForeignKey("job_posts.id", ondelete="CASCADE"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "opportunity_id", "job_post_id", name="uq_opportunity_job_link"
+        ),
+        Index("ix_opportunity_job_links_job", "job_post_id"),
+    )
 
 
 class JobPostModel(Base):
@@ -465,6 +758,136 @@ class JobMatchAnalysisModel(Base):
     __table_args__ = (Index("ix_job_match_analysis_post", "job_post_id", "created_at"),)
 
 
+class JobFitProposalModel(Base):
+    __tablename__ = "job_fit_proposals"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    job_post_id: Mapped[str] = mapped_column(
+        ForeignKey("job_posts.id", ondelete="CASCADE"), nullable=False
+    )
+    job_post_version_id: Mapped[str] = mapped_column(
+        ForeignKey("job_post_versions.id", ondelete="CASCADE"), nullable=False
+    )
+    profile_id: Mapped[str] = mapped_column(
+        ForeignKey("candidate_profiles.id", ondelete="CASCADE"), nullable=False
+    )
+    fact_set_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    preference_set_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    schema_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    content_json: Mapped[str] = mapped_column(Text, nullable=False)
+    input_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    output_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(24), nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    agent_run_id: Mapped[str] = mapped_column(
+        ForeignKey("agent_runs.id", ondelete="RESTRICT"), nullable=False
+    )
+    formal_analysis_id: Mapped[str | None] = mapped_column(
+        ForeignKey("job_match_analyses.id", ondelete="SET NULL")
+    )
+    resolution_reason: Mapped[str | None] = mapped_column(String(500))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    __table_args__ = (
+        Index("ix_job_fit_proposals_post", "job_post_id", "created_at"),
+        Index("ix_job_fit_proposals_review", "status", "created_at"),
+    )
+
+
+class ResumeDirectionProposalModel(Base):
+    __tablename__ = "resume_direction_proposals"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    job_post_id: Mapped[str] = mapped_column(
+        ForeignKey("job_posts.id", ondelete="CASCADE"), nullable=False
+    )
+    job_post_version_id: Mapped[str] = mapped_column(
+        ForeignKey("job_post_versions.id", ondelete="CASCADE"), nullable=False
+    )
+    job_match_analysis_id: Mapped[str] = mapped_column(
+        ForeignKey("job_match_analyses.id", ondelete="RESTRICT"), nullable=False
+    )
+    profile_id: Mapped[str] = mapped_column(
+        ForeignKey("candidate_profiles.id", ondelete="CASCADE"), nullable=False
+    )
+    fact_set_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    preference_set_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    schema_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    content_json: Mapped[str] = mapped_column(Text, nullable=False)
+    input_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    output_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(24), nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    agent_run_id: Mapped[str] = mapped_column(
+        ForeignKey("agent_runs.id", ondelete="RESTRICT"), nullable=False
+    )
+    resolution_reason: Mapped[str | None] = mapped_column(String(500))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    __table_args__ = (
+        Index("ix_resume_direction_proposals_post", "job_post_id", "created_at"),
+        Index("ix_resume_direction_proposals_review", "status", "created_at"),
+    )
+
+
+class ResumeDirectionSelectionModel(Base):
+    __tablename__ = "resume_direction_selections"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    proposal_id: Mapped[str] = mapped_column(
+        ForeignKey("resume_direction_proposals.id", ondelete="RESTRICT"),
+        nullable=False, unique=True,
+    )
+    job_post_id: Mapped[str] = mapped_column(
+        ForeignKey("job_posts.id", ondelete="CASCADE"), nullable=False
+    )
+    job_post_version_id: Mapped[str] = mapped_column(
+        ForeignKey("job_post_versions.id", ondelete="RESTRICT"), nullable=False
+    )
+    profile_id: Mapped[str] = mapped_column(
+        ForeignKey("candidate_profiles.id", ondelete="CASCADE"), nullable=False
+    )
+    fact_set_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    preference_set_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    selected_direction_ids_json: Mapped[str] = mapped_column(Text, nullable=False)
+    selected_content_json: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(24), nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    __table_args__ = (Index("ix_resume_direction_selections_job", "job_post_id", "created_at"),)
+
+
+class MaterialAgentProposalModel(Base):
+    __tablename__ = "material_agent_proposals"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    job_post_id: Mapped[str] = mapped_column(ForeignKey("job_posts.id", ondelete="CASCADE"), nullable=False)
+    job_post_version_id: Mapped[str] = mapped_column(ForeignKey("job_post_versions.id", ondelete="RESTRICT"), nullable=False)
+    resume_direction_selection_id: Mapped[str] = mapped_column(ForeignKey("resume_direction_selections.id", ondelete="RESTRICT"), nullable=False)
+    profile_id: Mapped[str] = mapped_column(ForeignKey("candidate_profiles.id", ondelete="CASCADE"), nullable=False)
+    resume_id: Mapped[str | None] = mapped_column(ForeignKey("resumes.id", ondelete="RESTRICT"))
+    base_resume_version_id: Mapped[str | None] = mapped_column(
+        ForeignKey("resume_versions.id", ondelete="RESTRICT")
+    )
+    resume_name: Mapped[str] = mapped_column(String(300), nullable=False)
+    material_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    fact_set_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    schema_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    content_json: Mapped[str] = mapped_column(Text, nullable=False)
+    review_schema_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    review_json: Mapped[str] = mapped_column(Text, nullable=False)
+    input_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    output_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(24), nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    drafter_run_id: Mapped[str] = mapped_column(ForeignKey("agent_runs.id", ondelete="RESTRICT"), nullable=False)
+    reviewer_run_id: Mapped[str] = mapped_column(ForeignKey("agent_runs.id", ondelete="RESTRICT"), nullable=False)
+    material_draft_id: Mapped[str | None] = mapped_column(ForeignKey("material_drafts.id", ondelete="SET NULL"))
+    resolution_reason: Mapped[str | None] = mapped_column(String(500))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    __table_args__ = (
+        Index("ix_material_agent_proposals_job", "job_post_id", "created_at"),
+        Index("ix_material_agent_proposals_review", "status", "created_at"),
+    )
+
+
 class JobMatchEvidenceModel(Base):
     __tablename__ = "job_match_evidence"
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
@@ -488,6 +911,11 @@ class ResumeModel(Base):
     __tablename__ = "resumes"
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     name: Mapped[str] = mapped_column(String(300), nullable=False)
+    series_type: Mapped[str] = mapped_column(String(24), nullable=False, default="base")
+    parent_resume_id: Mapped[str | None] = mapped_column(
+        ForeignKey("resumes.id", ondelete="RESTRICT")
+    )
+    direction_label: Mapped[str | None] = mapped_column(String(120))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
@@ -504,11 +932,20 @@ class MaterialDraftModel(Base):
     job_post_version_id: Mapped[str] = mapped_column(
         ForeignKey("job_post_versions.id", ondelete="RESTRICT"), nullable=False
     )
+    source_resume_version_id: Mapped[str | None] = mapped_column(
+        ForeignKey("resume_versions.id", ondelete="RESTRICT")
+    )
+    resume_direction_selection_id: Mapped[str | None] = mapped_column(
+        ForeignKey("resume_direction_selections.id", ondelete="RESTRICT")
+    )
     job_title_snapshot: Mapped[str] = mapped_column(String(300), nullable=False)
     company_name_snapshot: Mapped[str] = mapped_column(String(300), nullable=False)
     material_type: Mapped[str] = mapped_column(String(32), nullable=False)
     status: Mapped[str] = mapped_column(String(24), nullable=False)
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    strategy_stale: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    strategy_stale_reason: Mapped[str | None] = mapped_column(String(500))
+    strategy_stale_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     __table_args__ = (Index("ix_material_drafts_status_updated", "status", "updated_at"),)
@@ -520,12 +957,16 @@ class ResumeVersionModel(Base):
     resume_id: Mapped[str] = mapped_column(
         ForeignKey("resumes.id", ondelete="CASCADE"), nullable=False
     )
-    material_draft_id: Mapped[str] = mapped_column(
-        ForeignKey("material_drafts.id", ondelete="CASCADE"), nullable=False
+    material_draft_id: Mapped[str | None] = mapped_column(
+        ForeignKey("material_drafts.id", ondelete="CASCADE")
     )
     parent_version_id: Mapped[str | None] = mapped_column(
         ForeignKey("resume_versions.id", ondelete="RESTRICT")
     )
+    source_resume_version_id: Mapped[str | None] = mapped_column(
+        ForeignKey("resume_versions.id", ondelete="RESTRICT")
+    )
+    version_scope: Mapped[str] = mapped_column(String(24), nullable=False, default="job_tailored")
     version_number: Mapped[int] = mapped_column(Integer, nullable=False)
     status: Mapped[str] = mapped_column(String(24), nullable=False)
     title: Mapped[str] = mapped_column(String(300), nullable=False)

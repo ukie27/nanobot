@@ -1,6 +1,6 @@
 # Nanobot Career 技术实现方案
 
-> 文档状态：技术方案初稿，可进入架构评审  
+> 文档状态：工程底座方案；2026-07-26 起 Runtime 处置以 `PRODUCT_FUNCTION_DESIGN.md` 第 23 节为准
 > 依据：[CAREER_REQUIREMENTS_ANALYSIS.md](./CAREER_REQUIREMENTS_ANALYSIS.md)  
 > 日期：2026-07-22  
 > 目标：将需求分析收敛为一套可实施、可测试、可演进的工业级工程方案
@@ -39,7 +39,7 @@ IMAP / OpenCLI / Model Providers / Local Files
 | 后台任务 | 数据库持久化 Job Queue + 进程内 Dispatcher/Worker |
 | 调度 | 数据库 Schedule + `croniter` 计算，不以 Agent turn 作为调度单位 |
 | 外部事件 | Source Event + Inbox 去重 + Transactional Outbox |
-| Agent | 复用 nanobot Provider/Runner/Tool/Skill，增加受控 Career Agent Port |
+| Agent | 保留并重构 AgentLoop，统一支持 interactive/task execution policy；业务知识不使用 Markdown Memory |
 | 招聘网站 | 将 OpenCLI 作为外部应用，通过受控子进程使用其公开 CLI 和 Browser Bridge；Career 侧只做输出校验与业务映射 |
 | 邮箱 | 新建严格只读 IMAP Connector |
 | 文件 | 本地内容寻址 File Store，数据库只保存元数据和引用 |
@@ -60,7 +60,7 @@ IMAP / OpenCLI / Model Providers / Local Files
 4. 任何重要状态变化都有来源、证据、置信度和确认记录。
 5. 本地数据、Secret 和外部模型调用满足隐私最小化原则。
 6. Windows 为首要开发和 Demo 平台，同时保持 Linux/macOS 可移植性。
-7. 不机械追求旧实现兼容，但优先保留不影响产品边界、运行稳定且具有未来扩展价值的 nanobot 能力。
+7. 不以旧 Nanobot 业务兼容为目标；只保留符合 Career 产品需求且优于重写成本的底层能力。
 
 ### 2.2 非目标
 
@@ -69,20 +69,20 @@ IMAP / OpenCLI / Model Providers / Local Files
 - 不实现跨设备实时同步。
 - 不使用自动批量投递、自动发邮件或自动招聘沟通。
 - 不把 OpenCLI 内部源码嵌入 Python 进程。
-- 不在本项目中开发或修改 OpenCLI 本体及其通用 Adapter；如外部工具能力不足，优先通过公开接口适配或向 OpenCLI 项目单独反馈。
-- 不把所有 Chat Channel 带入第一版主运行路径。
+- 不修改 OpenCLI 本体及其内置通用 Adapter；站点能力缺失时允许在本项目维护独立安装、只读、受 allowlist 控制的 OpenCLI Plugin。
+- 不把通用 Chat Channel、对话 Memory、Session 或 agent-turn Cron 带入 Career 发布运行路径。
 
 ### 2.3 已确认的代码处置前提
 
-现有 nanobot 是可调整的工程基础，而不是必须重写的障碍。技术处置以实际影响为判断依据：
+现有 nanobot 是可完全调整的源码基础，而不是需要兼容的独立产品。技术处置以 Career 价值为唯一判断依据：
 
 - **保留**：不影响 Career 主流程、安全和模块边界，并可能支持未来扩展。
 - **扩展**：职责基本合适，只需增加接口、策略或测试。
 - **重构/重写**：现有结构会导致业务状态不确定、权限过大、耦合或可靠性问题。
-- **隔离/默认禁用**：P0 不使用但未来可能有价值，且保留成本较低。
-- **删除**：确认无使用价值、功能重复或持续带来依赖、安全和维护负担。
+- **迁移后删除**：新路径接管后删除旧实现，避免长期双轨。
+- **删除/退出发布包**：与 Career 无关、功能重复或持续带来依赖、安全和维护负担。
 
-不为了“彻底重构”而移动稳定代码，也不为了“尽量复用”而保留错误业务模型。当前 CareerStore 等粗糙改造可以替换；Provider、AgentRunner、Tool、Session、Channel、MCP 等框架能力只要不干扰 Career Domain，可以继续保留并按需改进。
+不为了重构形式而移动代码，也不为了旧产品兼容而保留两套业务状态。Provider、Runner、AgentLoop、Cron、Channels、Skills 和 Tools 具有基础能力价值，按 Career-only 目标保留并重构；Markdown Memory、旧 Career Store 等错误业务模型直接替换或删除。
 
 ## 3. 工业级设计原则
 
@@ -247,7 +247,7 @@ Career Web 推荐 FastAPI。现有 `aiohttp` Chat API 的处理方式：
 
 1. 新建 FastAPI app 和 Career `/api/v1` 路由。
 2. 为 Local Web 和 Task Agent 实现产品所需接口。
-3. 新入口稳定后评估旧 API 的消费者和扩展价值；无价值且增加维护成本时删除，否则作为独立、默认关闭的兼容入口保留。
+3. 新入口稳定且确认无迁移调用后删除旧 API，不作为独立兼容产品入口保留。
 4. 两套 API 不共享业务逻辑，均通过 Application Service；不长期复制实现。
 
 ### 5.2 前端：React + TypeScript
@@ -347,7 +347,7 @@ Worker 领取任务时使用条件更新获得 lease。进程崩溃后，`lease_
 
 Scheduler 只负责按时向 `background_jobs` 投递确定性任务。默认每秒或数秒 tick，一次性补偿有限窗口内错过的任务。
 
-现有 `CronService` 只可参考 cron 计算和时区测试；新 Scheduler 不依赖旧 Service、JSON Store 或 `agent_turn` payload。
+保留并重构现有 `CronService`：复用 cron 计算、时区、一次性和周期调度能力，引入数据库 `ScheduleRepository` 和类型化 Job/Notification payload。Scheduler 负责何时触发，BackgroundJob Worker 负责可靠执行，最终不保留 JSON Cron 与 Career DB Schedule 两套状态。
 
 ## 6. 模块划分
 
@@ -403,6 +403,7 @@ career/domain/
 │   └── events.py
 ├── profile/
 ├── documents/
+├── opportunities/
 ├── jobs/
 ├── materials/
 ├── applications/
@@ -419,6 +420,7 @@ career/domain/
 |---|---|
 | Profile | CandidateProfile、CandidateFact、FactSource、确认/替代规则 |
 | Documents | Document、BlobReference、哈希和保留策略 |
+| Opportunities | RecruitmentOpportunity、OpportunitySource、OpportunityVersion、OpportunityJobLink、分流状态 |
 | Jobs | Company、JobPost、JobPostVersion、Requirement、MatchAnalysis |
 | Materials | Resume、ResumeVersion、Draft、Review、Export、Snapshot |
 | Applications | Application、ApplicationEvent、EventProposal、状态机 |
@@ -497,7 +499,7 @@ career/connectors/
 └── files/
 ```
 
-Connector 只产出标准化事件和游标，不导入 Application Repository。
+Connector 只产出标准化事件和游标，不导入 Application Repository。牛客公司招聘批次映射为 `RecruitmentOpportunity`；只有包含具体职责和任职要求的真实 JD 才映射为 `JobPost`。从机会导入 JD 时，岗位版本和 `OpportunityJobLink` 必须在同一事务内提交，重复命令保持幂等。
 
 ### 6.6 Agent 模块
 
@@ -511,7 +513,9 @@ career/agent/
 └── workflows/
 ```
 
-它通过现有 Runtime 的扩展适配器实现 `AgentTaskPort`。交互 Agent 可以继续使用 `AgentLoop`；后台 Task Agent 使用受约束入口。Application 层只依赖 Port，因此后续即使需要修改 Loop，也不会影响 Domain。
+`AgentTaskPort` 适配同一个 AgentLoop 的 task execution policy，复用 Provider、重试、消息转换和 Tool Registry；固定 Context、Schema、预算和 allowlist。Application 层只依赖 Port，Domain 不依赖 AgentLoop 实现。
+
+Phase A 已落地统一审计读模型：`AgentRun` 记录 Provider、模型、版本、输入引用与哈希、工具摘要、Token、耗时、重试、错误和敏感等级；`ReviewTask` 记录跨事实、申请事件和面试反馈的统一人工确认投影，并可引用产生候选的 AgentRun。通用审查查询不直接执行领域确认命令。
 
 ### 6.7 API 模块
 
@@ -871,12 +875,11 @@ interview_invited Event confirmed
 
 ## 11. Agent Runtime 工程方案
 
-### 11.1 两类 Agent 入口
+### 11.1 Career Task Agent 入口
 
-1. **Interactive Agent**：用户在工作台对话，复用 Session 和流式体验。
-2. **Task Agent**：后台确定任务，输入输出固定 Schema、工具 allowlist、超时和幂等键。
+用户主要通过 Web 执行明确操作。AgentLoop 保留为核心编排器，并增加 task execution policy：后台任务输入输出固定 Schema、默认无工具、具有超时和幂等键，不以无限制自由对话方式运行。
 
-业务自动化必须使用 Task Agent，不能模拟一条聊天消息交给通用 AgentLoop 自由规划。
+未来如增加自然语言入口，它只负责解释和生成明确 Application Command，不形成第二套 Session/Memory/业务写入路径。
 
 ### 11.2 AgentTaskPort
 
@@ -1486,41 +1489,35 @@ delete：确认冗余、无价值或持续产生负担
 |---|---|---|
 | Provider registry/实现 | keep/extend | 支持多模型；增加统一错误和隐私策略 |
 | AgentRunner 工具迭代 | extend | 增加 Task Agent 所需 Schema、预算和 allowlist |
-| AgentLoop | keep/refactor as needed | 继续服务 Interactive Agent；不承担确定性业务编排 |
-| ContextBuilder/Memory | keep + isolate | 保留交互能力；Task Agent 使用最小 Career Context，业务事实不写 Memory |
-| Tool base/registry | keep/extend | 新增 Career Tool allowlist，不删除通用交互扩展能力 |
-| SessionManager | keep | 服务 Agent 工作台，与 Career 数据隔离 |
-| MessageBus | keep + boundary | 服务 Channel/交互；Application、Job、Outbox 不依赖它维护状态 |
-| CronService | keep/extend or parallel | 通用 Agent Cron 可保留；确定性任务使用新 Schedule/Job |
-| ConfirmManager | keep + boundary | 交互即时确认保留；业务确认使用 ReviewTask |
+| AgentLoop | keep/refactor | 统一支持 interactive/task execution policy，不承担业务状态 |
+| ContextBuilder/Memory | rewrite/replace | 使用 ContextManifest、Evidence/Fact/Event/Insight/Strategy 业务知识系统 |
+| Tool base/registry | keep/extend | 保留工具能力，按 execution policy 控制 allowlist 和风险 |
+| SessionManager | keep/refactor | 只服务短期交互；业务使用 Domain Event/AgentRun |
+| MessageBus | keep + boundary | 服务运行时消息，不替代 Domain Event/Outbox |
+| CronService | keep/refactor | 与数据库 Schedule 合并为统一调度引擎 |
+| ConfirmManager | replace | 统一使用持久化 ReviewTask |
 | CareerStore/ResumeService | replace | 新 Domain 接管后再删除粗糙实现 |
 | career_resume Tool | replace | 改为用例级 Career Tool，旧 Tool 在切换后删除 |
-| Email Channel | isolate/keep | 可用于未来通信，但不能充当只读业务 Connector |
-| Chat Channels | isolate/default disabled | P0 不加载；后续通知/交互可能复用 |
-| aiohttp API | evaluate/isolate | FastAPI 是 Career 主入口；旧 API 无负担时可作为可选入口 |
-| Exec Tool | keep with policy | 交互/开发可用；自动 Connector 禁用并使用专用 Runner |
-| SubagentManager | keep optional | P0 不依赖，不影响主路径则无需删除 |
-| MCP | keep optional | 未来扩展能力，默认不进入 P0 关键路径 |
-| 通用 Skills/Templates | keep selectively | 默认不加载；仅清理重复、误导或高维护成本内容 |
+| Email Channel | refactor/split | 入站严格只读 IMAP；出站作为通知适配器 |
+| Chat Channels | keep/refactor | 以发送提醒为主，未来支持安全回执 |
+| aiohttp API | replace/delete | FastAPI 是唯一产品 API |
+| Exec Tool | keep with policy | 保留未来能力；不默认开放给不可信后台任务，Connector 使用固定 Runner |
+| SubagentManager | keep/evaluate | 暂不删除，只有具体 Workflow 才启用 |
+| MCP | keep/evaluate | 暂不删除，按具体 Connector/Tool 需求启用 |
+| 通用 Skills/Templates | keep/refactor | 正式任务另用版本化 Career Task Prompt/Schema |
 
 ### 24.3 演进步骤
 
 1. 冻结旧 Career MVP 的功能扩展，只处理安全和阻塞问题。
 2. 在 `nanobot/career` 中建立 Domain/Application/Infrastructure 新边界。
-3. 通过 Adapter/Port 使用现有 Provider、Runner、Session 等能力，避免 Career 反向耦合通用框架实现。
-4. 新 Career API/Web 达到最小可用后切换产品主入口；通用 Agent 入口可继续作为可选能力。
-5. 对受影响模块做针对性修改，并以回归测试保证原有可用扩展不被无意破坏。
-6. 仅删除确认无调用、无扩展价值且持续增加维护成本的实现；删除前记录原因并检查依赖。
+3. 保留并重构 Provider、Runner、AgentLoop、Cron、Channels、Tools 等基础能力，Career Domain 只通过 Port 使用。
+4. 新 Career API/Web 成为主产品入口；AgentLoop 继续作为受 execution policy 管理的 Agent 核心。
+5. 以 Career 回归测试保证业务正确性，同时保留经过明确评估的通用基础能力。
+6. 旧 Career Store、Resume Service 和重复 Career Tool 不做数据迁移，清除引用和旧测试后直接删除。
 
-### 24.4 可选旧数据导入
+### 24.4 旧 Career 数据处置
 
-先盘点是否存在真实需要保留的 `career.db`。没有真实数据时可直接建立新库。如果存在数据，则提供离线导入命令：
-
-- 只读打开旧库并先备份。
-- 把 profile 字段转换为 `proposed` Fact。
-- 把 resume 转为 ResumeVersion，保留内容和父关系。
-- 输出导入报告，让用户在新版中复核。
-- 导入幂等；旧 Store 在确认迁移完成且无调用后再删除。
+旧 Career Store 属于早期粗糙实现，本项目不保留其数据，也不开发迁移命令。新 Domain/Application/Repository 路径覆盖启动和测试引用后，直接删除旧数据库逻辑、Resume Service、旧 Tool 及对应兼容测试。删除前只需确认目标文件和运行引用，不需要转换旧 `career.db`。
 
 ## 25. 分阶段落地计划
 
@@ -1638,7 +1635,7 @@ delete：确认冗余、无价值或持续产生负担
 7. 接受新建只读 IMAP Connector，不复用现有 Email Channel。
 8. 接受 OS Keyring fail-closed Secret 策略。
 9. 接受 `~/.nanobot-career` 的概念数据根目录，实际路径由 `platformdirs` 决定。
-10. 接受 BOSS 作为 P0 唯一 OpenCLI 招聘来源。
+10. 接受牛客校招日程作为默认每日信息来源，BOSS 保留为可选定向岗位来源；自动日程严格限制为中国时间当天，7/14/30 天回填只能由用户触发。
 11. 接受现有代码按 keep/extend/refactor/isolate/replace/delete 评估，不进行无收益的整体重写或批量删除。
 
 简历导出格式建议 P0 先保证 PDF，并把 DOCX 作为 P1；面试录音 P0 只支持手动文本反馈，录音上传/转写进入 P1。这样可以控制首版依赖和合规范围。

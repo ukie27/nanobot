@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 from datetime import UTC, datetime, timedelta
+from time import perf_counter
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -13,11 +16,18 @@ from nanobot.career.domain.common.errors import CareerDomainError
 
 
 class MailApplicationService:
-    def __init__(self, *, gateway, client, secrets, applications) -> None:
+    ANALYSIS_JOB_TYPE = "mail.intelligence.analyze"
+
+    def __init__(
+        self, *, gateway, client, secrets, applications, tasks=None, jobs=None, analyzer=None
+    ) -> None:
         self.gateway = gateway
         self.client = client
         self.secrets = secrets
         self.applications = applications
+        self.tasks = tasks
+        self.jobs = jobs
+        self.analyzer = analyzer
 
     def get(self) -> dict[str, Any]:
         return self.gateway.get()
@@ -54,6 +64,75 @@ class MailApplicationService:
 
     def list_messages(self, *, limit: int = 100) -> list[dict[str, Any]]:
         return self.gateway.list_messages(limit=limit)
+
+    def analyze_message(self, *, message_id: str) -> dict[str, Any]:
+        if self.analyzer is None:
+            raise CareerDomainError(
+                "邮件智能分析 Agent 尚未配置，请配置 Nanobot 模型提供方后重启。",
+                code="mail_intelligence_unavailable",
+            )
+        message = self.gateway.get_message(message_id)
+        if message.get("intelligence") is not None:
+            return message["intelligence"]
+        if not message["body_fetched"]:
+            raise CareerDomainError(
+                "该邮件只有 Header，缺少可供 Agent 核验的正文证据。",
+                code="mail_intelligence_body_unavailable",
+            )
+        applications = self.applications.list_applications()
+        input_hash = self._analysis_input_hash(message, applications)
+        started_at = datetime.now(UTC)
+        started = perf_counter()
+        try:
+            result = self.analyzer.analyze(message=message, applications=applications)
+        except CareerDomainError as exc:
+            self.gateway.save_analysis_failure(
+                message_id=message_id, input_hash=input_hash, error_code=exc.code,
+                audit=self._analysis_audit(started_at, started),
+            )
+            raise
+        output_json = result.model_dump_json(by_alias=True)
+        return self.gateway.save_analysis(
+            message_id=message_id, result=result, input_hash=input_hash,
+            output_hash=hashlib.sha256(output_json.encode("utf-8")).hexdigest(),
+            audit=self._analysis_audit(started_at, started),
+        )
+
+    def resolve_intelligence_item(
+        self, *, item_id: str, expected_version: int, resolution: str, reason: str
+    ) -> dict[str, Any]:
+        item = self.gateway.get_intelligence_item(item_id)
+        if item["status"] != "pending":
+            return self.gateway.resolve_intelligence_item(
+                item_id, expected_version=expected_version, resolution=resolution, reason=reason
+            )
+        if resolution == "confirmed":
+            application_id = item.get("application_id")
+            if item["item_type"] == "event" and item.get("status_candidate") and application_id:
+                application = next(
+                    (entry for entry in self.applications.list_applications() if entry["id"] == application_id),
+                    None,
+                )
+                if application is None:
+                    raise LookupError("Agent 匹配的申请已不存在。")
+                self.applications.add_event(
+                    application_id, expected_version=application["version"],
+                    target_status=ApplicationStatus(item["status_candidate"]),
+                    occurred_at=item["occurred_at"] or datetime.now(UTC),
+                    note=f"邮件 Agent 确认：{item['title']}\n{item['details']}\n证据：{item['evidence']}",
+                    command_id=f"mail-intelligence:{item_id}", source="imap_agent",
+                )
+            elif item["item_type"] == "schedule" and self.tasks is not None:
+                self.tasks.create_task(
+                    title=item["title"], task_type=item["category"],
+                    due_at=item["scheduled_at"], timezone="Asia/Shanghai",
+                    notes=f"{item['details']}\n证据：{item['evidence']}", priority=40,
+                    application_id=application_id,
+                    source_key=f"mail-intelligence:{item_id}",
+                )
+        return self.gateway.resolve_intelligence_item(
+            item_id, expected_version=expected_version, resolution=resolution, reason=reason
+        )
 
     def propose_for_application(self, *, message_id: str, application_id: str) -> dict[str, Any]:
         message = self.gateway.get_message(message_id)
@@ -94,6 +173,7 @@ class MailApplicationService:
             "created_count": 0,
             "updated_count": 0,
             "duplicate_count": 0,
+            "analysis_queued_count": 0,
         }
         try:
             config = self._connection_config(state)
@@ -115,14 +195,18 @@ class MailApplicationService:
                         self._create_candidate(message)
                     continue
                 counts["created_count"] += 1
+                if self._queue_analysis(message):
+                    counts["analysis_queued_count"] += 1
                 if message["event_kind"]:
                     self._create_candidate(message)
-            return self.gateway.finish_run(
+            finished = self.gateway.finish_run(
                 run["id"],
                 uid_validity=result["uid_validity"],
                 last_uid=result["last_uid"],
                 **counts,
             )
+            finished["analysis_queued_count"] = counts["analysis_queued_count"]
+            return finished
         except ImapReadOnlyError as exc:
             self.gateway.fail_run(run["id"], error_code=exc.code)
             raise
@@ -132,6 +216,36 @@ class MailApplicationService:
 
     def run_due(self) -> dict[str, Any] | None:
         return self.sync(trigger_type="schedule") if self.gateway.due() else None
+
+    def process_next_analysis_job(self, *, worker_id: str = "career-mail-worker") -> bool:
+        if self.jobs is None or self.analyzer is None:
+            return False
+        job = self.jobs.claim_next(
+            worker_id, lease_seconds=300, job_types={self.ANALYSIS_JOB_TYPE}
+        )
+        if job is None:
+            return False
+        try:
+            self.analyze_message(message_id=str(job.payload["message_id"]))
+        except CareerDomainError as exc:
+            self.jobs.fail(job.id, worker_id, error_code=exc.code)
+        except Exception:
+            self.jobs.fail(job.id, worker_id, error_code="mail_intelligence_job_failed")
+        else:
+            self.jobs.complete(job.id, worker_id)
+        return True
+
+    def _queue_analysis(self, message: dict[str, Any]) -> bool:
+        if (
+            self.jobs is None or self.analyzer is None or not message.get("body_fetched")
+            or message.get("intelligence") is not None
+        ):
+            return False
+        self.jobs.enqueue(
+            self.ANALYSIS_JOB_TYPE, {"message_id": message["id"]},
+            idempotency_key=f"mail-intelligence:{message['id']}", priority=40, max_attempts=3,
+        )
+        return True
 
     def _create_candidate(self, message: dict[str, Any]) -> None:
         application, score, reason = self._match(message)
@@ -221,3 +335,32 @@ class MailApplicationService:
         if scheduled:
             return datetime.fromisoformat(str(scheduled)).astimezone(UTC)
         return message["sent_at"] or datetime.now(UTC)
+
+    @staticmethod
+    def _analysis_input_hash(message: dict[str, Any], applications: list[dict[str, Any]]) -> str:
+        payload = {
+            "id": message["id"], "uid": message["uid"], "sender": message["sender"],
+            "subject": message["subject"], "sent_at": str(message.get("sent_at")),
+            "body_hash": message.get("body_hash"), "evidence": message.get("evidence_excerpt"),
+            "applications": [
+                [item["id"], item["company"], item["job_title"], item["current_status"], item["version"]]
+                for item in applications
+            ],
+        }
+        encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)
+        return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+    def _analysis_audit(self, started_at: datetime, started: float) -> dict[str, Any]:
+        provider = getattr(self.analyzer, "provider", None)
+        usage = getattr(self.analyzer, "last_usage", {}) or {}
+        return {
+            "implementation": getattr(self.analyzer, "name", "mail_intelligence"),
+            "provider": type(provider).__name__ if provider is not None else None,
+            "model": getattr(self.analyzer, "model", None),
+            "prompt_version": getattr(self.analyzer, "prompt_version", "mail_intelligence.v1"),
+            "created_at": started_at,
+            "duration_ms": max(0, round((perf_counter() - started) * 1000)),
+            "input_tokens": usage.get("prompt_tokens") or usage.get("input_tokens"),
+            "output_tokens": usage.get("completion_tokens") or usage.get("output_tokens"),
+            "retry_count": int(getattr(self.analyzer, "last_retry_count", 0)),
+        }

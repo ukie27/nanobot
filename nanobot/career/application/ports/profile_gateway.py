@@ -23,6 +23,13 @@ class ProfileGateway(Protocol):
         facts: list[ExtractedFact],
         run_status: str = "succeeded",
         error_code: str | None = None,
+        provider: str | None = None,
+        model: str | None = None,
+        prompt_version: str | None = None,
+        duration_ms: int | None = None,
+        input_tokens: int | None = None,
+        output_tokens: int | None = None,
+        retry_count: int = 0,
     ) -> dict[str, Any]: ...
 
     def get_profile(self) -> dict[str, Any]: ...

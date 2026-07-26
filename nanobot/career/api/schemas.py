@@ -52,6 +52,21 @@ class ConnectorLoginRequest(BaseModel):
     timeout: int = Field(default=300, ge=30, le=600)
 
 
+class NowcoderConnectorConfigUpdate(BaseModel):
+    enabled: bool = False
+    search_query: str = Field(default="", max_length=200)
+    city: str = Field(default="全国", min_length=1, max_length=100)
+    result_limit: int = Field(default=500, ge=1, le=1000)
+    schedule_enabled: bool = False
+    schedule_times: list[str] = Field(
+        default_factory=lambda: ["09:00"], min_length=1, max_length=8
+    )
+
+
+class NowcoderScanRequest(BaseModel):
+    lookback_days: int = Field(default=0)
+
+
 class ImapAccountUpdate(BaseModel):
     enabled: bool = False
     email_address: str = Field(min_length=3, max_length=320)
