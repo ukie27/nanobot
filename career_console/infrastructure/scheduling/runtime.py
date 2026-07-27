@@ -53,7 +53,7 @@ class CareerSchedulerRuntime:
     def run_once(
         self, *, trigger_type: str = "schedule", now: datetime | None = None
     ) -> dict[str, Any]:
-        started = datetime.now(UTC)
+        started = now or datetime.now(UTC)
         config = self.configuration_service.store.load().configuration.scheduler
         counters: dict[str, int] = {
             "schedules_processed": 0, "reminders_triggered": 0,

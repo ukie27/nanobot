@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime
+from pathlib import Path
 from time import perf_counter
 from typing import get_args
 
@@ -64,6 +65,232 @@ class AgentConfigurationUpdateRequest(StrictRequest):
 
 class ProviderTestRequest(StrictRequest):
     model: str | None = Field(default=None, max_length=200)
+
+
+CONFIGURATION_CHECKS = (
+    "workspace", "general", "appearance", "privacy", "runtime", "agent_routing",
+    "opencli", "nowcoder", "boss", "mail", "qq", "scheduler",
+    "portable_export", "portable_import",
+)
+
+
+def _check_result(
+    capability: str, check_status: str, summary: str,
+    *, details: list[str] | None = None, error_code: str | None = None,
+) -> dict:
+    return {
+        "capability": capability,
+        "status": check_status,
+        "checked_at": datetime.now(UTC),
+        "summary": summary,
+        "details": details or [],
+        "error_code": error_code,
+    }
+
+
+@router.get("/checks")
+def configuration_checks() -> dict:
+    return {
+        "items": [
+            {"capability": capability, "testable": True}
+            for capability in CONFIGURATION_CHECKS
+        ],
+        "total": len(CONFIGURATION_CHECKS),
+    }
+
+
+@router.post("/checks/{capability}")
+def run_configuration_check(capability: str, request: Request) -> dict:
+    if capability not in CONFIGURATION_CHECKS:
+        raise HTTPException(status_code=404, detail="未知配置检查项。")
+    try:
+        document = request.app.state.configuration_service.store.load()
+        config = document.configuration
+        if capability == "workspace":
+            details = request.app.state.workspace_manager.preflight(
+                request.app.state.settings.data_dir
+            )
+            return _check_result(
+                capability, "passed", "工作区目录、写入和数据库检查通过。",
+                details=[
+                    f"database={details['database']}",
+                    f"free_bytes={details['free_bytes']}",
+                ],
+            )
+        if capability == "general":
+            from zoneinfo import ZoneInfo
+
+            ZoneInfo(config.general.timezone)
+            return _check_result(
+                capability, "passed", "语言、时区和日期格式有效。",
+                details=[config.general.locale, config.general.timezone],
+            )
+        if capability == "appearance":
+            return _check_result(
+                capability, "passed", "界面密度和动效偏好有效。",
+                details=[
+                    f"density={config.appearance.density}",
+                    f"reduce_motion={config.appearance.reduce_motion}",
+                ],
+            )
+        if capability == "privacy":
+            if not (
+                config.privacy.redact_sensitive_logs
+                and config.privacy.local_only_network_binding
+            ):
+                return _check_result(
+                    capability,
+                    "failed",
+                    "敏感日志脱敏和仅本机访问必须保持开启。",
+                    error_code="privacy_guard_disabled",
+                )
+            return _check_result(
+                capability,
+                "passed",
+                "本地数据保护设置有效。",
+                details=[
+                    f"diagnostics_metadata={config.privacy.diagnostics_metadata_enabled}",
+                    "sensitive_logs=redacted",
+                    "network_binding=local_only",
+                ],
+            )
+        if capability == "runtime":
+            paths = (
+                request.app.state.settings.logs_dir,
+                request.app.state.settings.runtime_dir,
+            )
+            for path in paths:
+                Path(path).mkdir(parents=True, exist_ok=True)
+            return _check_result(
+                capability, "passed", "运行目录和资源限制有效。",
+                details=[f"log_level={config.runtime.log_level}"],
+            )
+        if capability == "agent_routing":
+            enabled = [
+                (name, task)
+                for name, task in config.agents.tasks if task.enabled
+            ]
+            if not enabled:
+                return _check_result(
+                    capability, "blocked", "尚未启用任何 Agent 任务。",
+                    error_code="agent_tasks_disabled",
+                )
+            missing = []
+            for name, task in enabled:
+                provider = config.providers.get(task.provider_id or "")
+                if (
+                    provider is None or not provider.enabled
+                    or (
+                        provider.secret_ref
+                        and not _has_secret(request, provider.secret_ref)
+                    )
+                ):
+                    missing.append(name)
+            if missing:
+                return _check_result(
+                    capability, "failed", "部分 Agent 任务缺少可用 Provider 或凭据。",
+                    details=missing, error_code="agent_provider_unavailable",
+                )
+            return _check_result(
+                capability, "passed", f"{len(enabled)} 个 Agent 任务映射有效。"
+            )
+        if capability == "opencli":
+            runner = request.app.state.connector_service.runner
+            if not runner.installed:
+                return _check_result(
+                    capability, "failed", "未找到 OpenCLI 可执行文件。",
+                    error_code="opencli_not_installed",
+                )
+            version = runner.version()
+            return _check_result(
+                capability, "passed", "OpenCLI 可执行且版本查询成功。",
+                details=[str(version)],
+            )
+        if capability in {"nowcoder", "boss"}:
+            service = (
+                request.app.state.nowcoder_connector_service
+                if capability == "nowcoder"
+                else request.app.state.connector_service
+            )
+            health = service.health()
+            state = str(health.get("status", health.get("health", "unknown")))
+            passed = state in {"healthy", "ready", "passed", "ok"}
+            source_name = "牛客" if capability == "nowcoder" else "BOSS"
+            source_error = health.get("error_code")
+            if passed:
+                summary = f"{source_name}来源可用。"
+            elif source_error == "opencli_not_installed":
+                summary = (
+                    "未检测到 OpenCLI。请先在“设置 → 数据来源”中"
+                    "配置 OpenCLI 可执行文件。"
+                )
+            elif source_error == "requires_login":
+                summary = f"{source_name}尚未登录，请先打开登录页面完成登录。"
+            else:
+                summary = f"{source_name}来源暂不可用，请检查数据来源设置。"
+            return _check_result(
+                capability, "passed" if passed else "failed",
+                summary,
+                error_code=None if passed else str(
+                    source_error or f"{capability}_unavailable"
+                ),
+            )
+        if capability == "mail":
+            result = request.app.state.mail_service.test_connection()
+            return _check_result(
+                capability, "passed", "邮箱只读连接正常。",
+                details=[
+                    f"read_only={result.get('read_only', True)}",
+                    f"uid_validity={result.get('uid_validity', 'unknown')}",
+                ],
+            )
+        if capability == "qq":
+            result = request.app.state.channel_configuration.test_qq()
+            return _check_result(
+                capability, "passed", "QQ 通知测试消息发送成功。",
+                details=[f"status={result.get('status', 'passed')}"],
+            )
+        if capability == "scheduler":
+            enabled_jobs = [
+                name for name in (
+                    "reminders", "connector_jobs", "profile_maintenance",
+                    "channel_dispatch",
+                )
+                if getattr(config.scheduler, f"{name}_enabled")
+            ]
+            return _check_result(
+                capability, "passed", "调度配置自检通过，未执行任何业务任务。",
+                details=[
+                    f"enabled={config.scheduler.enabled}",
+                    f"jobs={','.join(enabled_jobs) or 'none'}",
+                ],
+            )
+        if capability == "portable_export":
+            request.app.state.workspace_manager.preflight(
+                request.app.state.settings.data_dir
+            )
+            required = (
+                request.app.state.settings.database_path,
+                request.app.state.settings.config_dir / "application.json",
+            )
+            missing = [str(path) for path in required if not path.is_file()]
+            if missing:
+                return _check_result(
+                    capability, "failed", "便携导出缺少必要文件。",
+                    details=missing, error_code="portable_export_incomplete",
+                )
+            return _check_result(
+                capability, "passed", "便携导出前置条件满足。"
+            )
+        return _check_result(
+            capability, "passed",
+            "便携导入入口可用；具体归档会在上传后执行格式、哈希和数据库校验。",
+        )
+    except (LookupError, OSError, RuntimeError, ValueError) as exc:
+        return _check_result(
+            capability, "failed", str(exc),
+            error_code=f"{capability}_check_failed",
+        )
 
 
 @router.get("")

@@ -34,15 +34,19 @@ function ProductLayout() {
     <div className="app-shell">
       <aside className="sidebar">
         <Brand />
+        <div className="career-track" aria-label="求职行动轨道">
+          {["机会", "准备", "投递", "面试", "结果"].map((item, index) =>
+            <span key={item}><i>{index + 1}</i>{item}</span>,
+          )}
+        </div>
         <nav aria-label="主导航">
-          <span className="nav-label">开始</span><NavLink to="/dashboard">今日</NavLink>
-          <span className="nav-label">找岗位</span><NavLink to="/opportunities">招聘信息</NavLink><NavLink to="/job-posts">岗位库</NavLink>
-          <span className="nav-label">投递</span><NavLink to="/applications">申请看板</NavLink><NavLink to="/tasks">任务与日程</NavLink><NavLink to="/interviews">面试</NavLink>
-          <span className="nav-label">简历与档案</span><NavLink to="/profile">职业档案</NavLink><NavLink to="/documents">资料导入</NavLink><NavLink to="/materials">申请材料</NavLink>
-          <span className="nav-label">消息与审查</span><NavLink to="/message-center">招聘邮件</NavLink><NavLink to="/reviews">待确认事项</NavLink>
+          <span className="nav-label">概览</span><NavLink to="/dashboard">今日</NavLink><NavLink to="/workspace">求职进展</NavLink>
+          <span className="nav-label">机会</span><NavLink to="/opportunities">每日招聘</NavLink><NavLink to="/job-posts">目标岗位</NavLink>
+          <span className="nav-label">投递</span><NavLink to="/applications">申请进度</NavLink><NavLink to="/tasks">任务与日程</NavLink><NavLink to="/interviews">面试</NavLink>
+          <span className="nav-label">我的材料</span><NavLink to="/profile">职业档案</NavLink><NavLink to="/materials">简历与申请材料</NavLink><NavLink to="/documents">资料来源</NavLink><NavLink to="/review">事实审查</NavLink>
+          <span className="nav-label">收件箱</span><NavLink to="/message-center">招聘邮件</NavLink><NavLink to="/reviews">待我确认</NavLink>
           <span className="nav-label">系统</span><NavLink to="/settings">设置</NavLink>
         </nav>
-        <details className="advanced-nav"><summary>高级与诊断</summary><NavLink to="/workspace">求职总览</NavLink><NavLink to="/data-sources">数据来源诊断</NavLink><NavLink to="/agent-runs">Agent 运行记录</NavLink><NavLink to="/status">运行状态</NavLink><NavLink to="/jobs">后台任务</NavLink></details>
       </aside>
       <main className="content">
         <Routes>
@@ -71,11 +75,20 @@ function ProductLayout() {
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="/status" element={<StatusPage />} />
           <Route path="/jobs" element={<JobsPage />} />
-          <Route path="*" element={<Navigate to="/status" replace />} />
+          <Route path="*" element={<NotFoundPage />} />
         </Routes>
       </main>
     </div>
   );
+}
+
+function NotFoundPage() {
+  return <section className="not-found">
+    <span>404</span>
+    <h1>这个页面不存在</h1>
+    <p>链接可能已经变更。返回今日页面继续，或从左侧导航选择目标功能。</p>
+    <NavLink className="download-button" to="/dashboard">返回今日</NavLink>
+  </section>;
 }
 
 function PageError({ error }: { error: Error }) {
@@ -99,7 +112,7 @@ function StatusPage() {
   return (
     <>
       <header className="page-header">
-        <div><p className="eyebrow">SYSTEM OVERVIEW</p><h1>运行状态</h1></div>
+        <div><p className="eyebrow">本地服务诊断</p><h1>运行状态</h1></div>
         <span className={`health-pill ${query.data?.health === "ready" ? "ok" : ""}`}>
           {query.isLoading ? "检查中" : query.data?.health === "ready" ? "服务就绪" : "需要处理"}
         </span>
@@ -108,13 +121,13 @@ function StatusPage() {
       {query.data && (
         <>
           <section className="metric-grid">
-            <article><span>应用版本</span><strong>{query.data.version}</strong><small>CareerConsole Runtime</small></article>
+            <article><span>应用版本</span><strong>{query.data.version}</strong><small>CareerConsole 本地服务</small></article>
             <article><span>数据库</span><strong>{query.data.database === "ok" ? "正常" : "异常"}</strong><small>SQLite · WAL</small></article>
-            <article><span>Schema revision</span><strong>{query.data.database_revision ?? "—"}</strong><small>目标 {query.data.expected_revision}</small></article>
-            <article><span>启动恢复任务</span><strong>{query.data.recovered_jobs_at_startup}</strong><small>过期 lease</small></article>
+            <article><span>数据库版本</span><strong>{query.data.database_revision ?? "—"}</strong><small>目标版本 {query.data.expected_revision}</small></article>
+            <article><span>启动时恢复</span><strong>{query.data.recovered_jobs_at_startup}</strong><small>异常中断的后台任务</small></article>
           </section>
           <section className="panel">
-            <div className="panel-heading"><div><p className="eyebrow">LOCAL STORAGE</p><h2>本地数据位置</h2></div><span>仅保存在本机</span></div>
+            <div className="panel-heading"><div><p className="eyebrow">数据目录</p><h2>本地数据位置</h2></div><span>仅保存在本机</span></div>
             <dl className="path-list">
               <div><dt>数据目录</dt><dd>{query.data.paths.data_dir}</dd></div>
               <div><dt>数据库</dt><dd>{query.data.paths.database}</dd></div>
@@ -136,14 +149,14 @@ function JobsPage() {
   return (
     <>
       <header className="page-header">
-        <div><p className="eyebrow">PERSISTENT QUEUE</p><h1>后台任务</h1></div>
+        <div><p className="eyebrow">故障处理</p><h1>后台任务</h1></div>
         <button type="button" className="secondary" onClick={() => void query.refetch()}>刷新</button>
       </header>
       {query.error && <PageError error={query.error} />}
       {query.data?.total === 0 && (
         <section className="empty-state">
           <div className="empty-icon">✓</div><h2>任务队列已就绪</h2>
-          <p>Part 0 不创建虚假业务任务。后续模块会在这里显示真实同步、解析和生成任务。</p>
+          <p>当前没有等待处理的同步、解析或生成任务。</p>
         </section>
       )}
       {query.data && query.data.total > 0 && (

@@ -134,6 +134,31 @@ class SqlAlchemyApplicationGateway:
         with self._session_factory() as session:
             return self._view(session, self._application(session, application_id))
 
+    def mark_job_ready(self, job_post_id: str) -> int:
+        """Advance tracked applications when their first Final material becomes available."""
+        now = datetime.now(UTC)
+        with self._session_factory() as session:
+            applications = session.scalars(
+                select(ApplicationModel).where(
+                    ApplicationModel.job_post_id == job_post_id,
+                    ApplicationModel.current_status == ApplicationStatus.PREPARING_MATERIALS.value,
+                )
+            ).all()
+            for application in applications:
+                self._append_event(
+                    session,
+                    application,
+                    event_type="application_status_changed",
+                    target=ApplicationStatus.READY_TO_APPLY,
+                    occurred_at=now,
+                    note="Final material is available.",
+                    source="system",
+                    idempotency_key=f"material-ready:{application.id}",
+                )
+                self._advance(application, now)
+            session.commit()
+            return len(applications)
+
     def submit_application(
         self,
         application_id: str,

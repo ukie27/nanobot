@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 from sqlalchemy import select
@@ -16,6 +17,7 @@ from career_console.infrastructure.database.models import (
 )
 from career_console.infrastructure.settings import CareerSettings
 from career_console.interfaces.http import create_app
+from career_console.interfaces.http.routes.configuration import run_configuration_check
 
 
 def _configuration() -> dict:
@@ -134,3 +136,40 @@ def test_runtime_configuration_applies_after_restart_and_appearance_hot_reloads(
 
     effective = apply_stored_runtime_configuration(settings)
     assert effective.max_document_bytes == 20 * 1024 * 1024
+
+
+def test_privacy_configuration_check_passes_with_safe_defaults(tmp_path: Path) -> None:
+    settings = CareerSettings(data_dir=tmp_path / "workspace")
+    with TestClient(create_app(settings)) as client:
+        response = client.post("/api/v1/configuration/checks/privacy", json={})
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["capability"] == "privacy"
+    assert body["status"] == "passed"
+
+
+def test_privacy_configuration_check_reports_disabled_guard(tmp_path: Path) -> None:
+    unsafe_configuration = SimpleNamespace(
+        privacy=SimpleNamespace(
+            redact_sensitive_logs=False,
+            local_only_network_binding=False,
+            diagnostics_metadata_enabled=False,
+        )
+    )
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                configuration_service=SimpleNamespace(
+                    store=SimpleNamespace(
+                        load=lambda: SimpleNamespace(configuration=unsafe_configuration)
+                    )
+                )
+            )
+        )
+    )
+
+    body = run_configuration_check("privacy", request)
+    assert body["capability"] == "privacy"
+    assert body["status"] == "failed"
+    assert body["error_code"] == "privacy_guard_disabled"

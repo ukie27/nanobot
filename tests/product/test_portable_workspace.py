@@ -57,7 +57,8 @@ def test_portable_workspace_round_trip_without_secrets(tmp_path: Path) -> None:
         assert imported["secrets_restored"] == 0
         assert imported["restart_required"] is True
         assert (target / "data" / "career-console.sqlite3").is_file()
-        assert manager.registry.active_workspace() == target.resolve()
+        assert manager.registry.active_workspace() is None
+        assert manager.registry.pending_workspace() == target.resolve()
 
 
 def test_portable_workspace_encrypts_and_restores_referenced_secrets(tmp_path: Path) -> None:
@@ -167,6 +168,6 @@ def test_portable_workspace_api_exports_downloadable_archive(tmp_path: Path) -> 
         )
         assert imported.status_code == 200, imported.text
         assert imported.json()["restart_required"] is True
-        assert manager.registry.active_workspace() == (
+        assert manager.registry.pending_workspace() == (
             tmp_path / "api-restored" / "CareerConsole"
         ).resolve()

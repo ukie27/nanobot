@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
+import sqlite3
 import tempfile
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -89,22 +91,141 @@ class BootstrapRegistry:
         self.path = path or bootstrap_file_path()
 
     def active_workspace(self) -> Path | None:
-        if not self.path.is_file():
-            return None
-        try:
-            payload = json.loads(self.path.read_text(encoding="utf-8"))
-            value = payload.get("activeWorkspace")
-            return Path(value).resolve(strict=False) if value else None
-        except (OSError, ValueError, TypeError):
-            return None
+        return self._workspace_value("activeWorkspace")
+
+    def pending_workspace(self) -> Path | None:
+        return self._workspace_value("pendingWorkspace")
+
+    def last_switch_error(self) -> str | None:
+        value = self._load().get("lastSwitchError")
+        return str(value) if value else None
 
     def activate(self, root: Path, workspace_id: str) -> None:
-        payload = {
+        payload = self._load()
+        payload.update({
             "schemaVersion": "career-console.bootstrap.v1",
             "activeWorkspace": str(root),
             "workspaceId": workspace_id,
             "updatedAt": datetime.now(UTC).isoformat(),
+        })
+        payload.pop("pendingWorkspace", None)
+        payload.pop("pendingWorkspaceId", None)
+        payload.pop("lastSwitchError", None)
+        self._save(payload)
+
+    def stage_pending(self, root: Path, workspace_id: str) -> None:
+        payload = self._load()
+        payload.update({
+            "schemaVersion": "career-console.bootstrap.v1",
+            "pendingWorkspace": str(root),
+            "pendingWorkspaceId": workspace_id,
+            "updatedAt": datetime.now(UTC).isoformat(),
+        })
+        payload.pop("lastSwitchError", None)
+        self._save(payload)
+
+    def cancel_pending(self) -> None:
+        payload = self._load()
+        payload.pop("pendingWorkspace", None)
+        payload.pop("pendingWorkspaceId", None)
+        payload.pop("lastSwitchError", None)
+        self._save(payload)
+
+    def commit_pending(self) -> dict[str, str | None] | None:
+        payload = self._load()
+        pending = payload.get("pendingWorkspace")
+        if not pending:
+            return None
+        snapshot = {
+            "previous_workspace": (
+                str(payload["activeWorkspace"])
+                if payload.get("activeWorkspace")
+                else None
+            ),
+            "previous_workspace_id": (
+                str(payload["workspaceId"])
+                if payload.get("workspaceId")
+                else None
+            ),
+            "pending_workspace": str(pending),
+            "pending_workspace_id": (
+                str(payload["pendingWorkspaceId"])
+                if payload.get("pendingWorkspaceId")
+                else None
+            ),
         }
+        payload["activeWorkspace"] = pending
+        if payload.get("pendingWorkspaceId"):
+            payload["workspaceId"] = payload["pendingWorkspaceId"]
+        payload["switchRollback"] = snapshot
+        payload.pop("pendingWorkspace", None)
+        payload.pop("pendingWorkspaceId", None)
+        payload.pop("lastSwitchError", None)
+        payload["updatedAt"] = datetime.now(UTC).isoformat()
+        self._save(payload)
+        return snapshot
+
+    def rollback_committed_switch(
+        self, snapshot: dict[str, str | None], message: str
+    ) -> None:
+        """Restore the old active workspace and keep the candidate pending."""
+        payload = self._load()
+        previous = snapshot.get("previous_workspace")
+        previous_id = snapshot.get("previous_workspace_id")
+        pending = snapshot.get("pending_workspace")
+        pending_id = snapshot.get("pending_workspace_id")
+        if previous:
+            payload["activeWorkspace"] = previous
+        else:
+            payload.pop("activeWorkspace", None)
+        if previous_id:
+            payload["workspaceId"] = previous_id
+        else:
+            payload.pop("workspaceId", None)
+        if pending:
+            payload["pendingWorkspace"] = pending
+        if pending_id:
+            payload["pendingWorkspaceId"] = pending_id
+        payload.pop("switchRollback", None)
+        payload["lastSwitchError"] = message[:1000]
+        payload["updatedAt"] = datetime.now(UTC).isoformat()
+        self._save(payload)
+
+    def finalize_committed_switch(self, active_root: Path) -> None:
+        """Clear rollback metadata after a restarted process opens the target."""
+        payload = self._load()
+        rollback = payload.get("switchRollback")
+        if not isinstance(rollback, dict):
+            return
+        active = payload.get("activeWorkspace")
+        if active and Path(str(active)).resolve(strict=False) == active_root.resolve(
+            strict=False
+        ):
+            payload.pop("switchRollback", None)
+            payload.pop("lastSwitchError", None)
+            payload["updatedAt"] = datetime.now(UTC).isoformat()
+            self._save(payload)
+
+    def record_switch_error(self, message: str) -> None:
+        payload = self._load()
+        payload["lastSwitchError"] = message[:1000]
+        payload["updatedAt"] = datetime.now(UTC).isoformat()
+        self._save(payload)
+
+    def _workspace_value(self, key: str) -> Path | None:
+        value = self._load().get(key)
+        return Path(str(value)).resolve(strict=False) if value else None
+
+    def _load(self) -> dict[str, Any]:
+        if not self.path.is_file():
+            return {}
+        try:
+            payload = json.loads(self.path.read_text(encoding="utf-8"))
+            return payload if isinstance(payload, dict) else {}
+        except (OSError, ValueError, TypeError):
+            return {}
+
+    def _save(self, payload: dict[str, Any]) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         _atomic_json(self.path, payload)
 
@@ -130,8 +251,45 @@ class WorkspaceManager:
             error = "目标路径已存在且不是目录。"
         if error is None and target.is_dir() and any(target.iterdir()) and not (target / "workspace.json").is_file():
             error = "目标目录非空且不是 CareerConsole 工作区。"
+        if error is None:
+            try:
+                self._probe_parent(resolved)
+                if target.is_dir():
+                    self.preflight(target)
+            except (OSError, ValueError, sqlite3.Error) as exc:
+                error = str(exc)
         return {"parent_directory": str(resolved), "workspace_path": str(target),
                 "valid": error is None, "error": error}
+
+    def preflight(self, root: Path) -> dict[str, Any]:
+        resolved = root.expanduser().resolve(strict=False)
+        paths = WorkspacePaths(resolved)
+        if not paths.manifest.is_file():
+            raise ValueError("候选目录缺少 workspace.json。")
+        manifest = WorkspaceManifest.model_validate_json(
+            paths.manifest.read_text(encoding="utf-8")
+        )
+        for directory in paths.directories():
+            if not directory.is_dir():
+                raise ValueError(f"工作区目录缺失：{directory.name}")
+            self._probe_directory(directory)
+        if paths.database.is_file():
+            with sqlite3.connect(
+                f"file:{paths.database.as_posix()}?mode=ro", uri=True
+            ) as connection:
+                result = connection.execute("PRAGMA quick_check").fetchone()
+            if result is None or result[0] != "ok":
+                raise ValueError("工作区数据库未通过 SQLite quick_check。")
+        free_bytes = shutil.disk_usage(resolved).free
+        if free_bytes < 100 * 1024 * 1024:
+            raise ValueError("工作区所在磁盘可用空间不足 100 MiB。")
+        return {
+            "workspace_path": str(resolved),
+            "workspace_id": manifest.workspace_id,
+            "valid": True,
+            "database": "ok" if paths.database.is_file() else "not_created",
+            "free_bytes": free_bytes,
+        }
 
     def create(self, parent: Path, *, name: str = "CareerConsole", activate: bool = True) -> WorkspaceManifest:
         check = self.validate_parent(parent)
@@ -201,6 +359,29 @@ class WorkspaceManager:
         if parent == source_root or source_root in parent.parents:
             return "不能在 CareerConsole 源码目录中创建工作区。"
         return None
+
+    @staticmethod
+    def _probe_parent(parent: Path) -> None:
+        parent.mkdir(parents=True, exist_ok=True)
+        probe_directory = Path(tempfile.mkdtemp(prefix=".career-console-probe-", dir=parent))
+        try:
+            WorkspaceManager._probe_directory(probe_directory)
+        finally:
+            probe_directory.rmdir()
+
+    @staticmethod
+    def _probe_directory(directory: Path) -> None:
+        source = directory / f".write-probe-{uuid4().hex}"
+        destination = directory / f".write-probe-renamed-{uuid4().hex}"
+        try:
+            with source.open("w", encoding="ascii", newline="\n") as handle:
+                handle.write("ok\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(source, destination)
+        finally:
+            source.unlink(missing_ok=True)
+            destination.unlink(missing_ok=True)
 
 
 def bootstrap_file_path() -> Path:

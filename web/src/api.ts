@@ -17,6 +17,7 @@ export interface SystemStatus {
 
 export interface WorkspaceStatus {
   product: "CareerConsole"; workspace_path: string; active_workspace_path: string | null;
+  pending_workspace_path: string | null; last_switch_error: string | null;
   onboarding_required: boolean; restart_required: boolean;
   manifest: null | { schemaVersion: string; workspaceId: string; name: string;
     product: string; createdAt: string; lastOpenedAt: string; portable: boolean;
@@ -39,10 +40,20 @@ export interface OnboardingStatus {
   completed: boolean;
   completed_at: string | null;
   skipped_steps: string[];
+  step_states: Record<string, "not_started" | "in_progress" | "configured" | "skipped" | "failed_validation">;
   workspace_ready: boolean;
   restart_required: boolean;
   runtime_mode: "bootstrap" | "product";
   capabilities: Record<"workspace" | "provider" | "profile" | "mail" | "opencli" | "channel" | "scheduler", boolean>;
+}
+
+export interface ConfigurationCheckResult {
+  capability: string;
+  status: "passed" | "failed" | "blocked";
+  checked_at: string;
+  summary: string;
+  details: string[];
+  error_code: string | null;
 }
 
 export interface PortableWorkspaceExport {
@@ -595,7 +606,7 @@ export interface IntegrationHealth {
 
 interface ProblemDetails {
   title?: string;
-  detail?: string;
+  detail?: string | { message?: string; code?: string };
   correlationId?: string;
 }
 
@@ -609,6 +620,12 @@ export class ApiError extends Error {
   }
 }
 
+function problemMessage(problem: ProblemDetails, status: number): string {
+  if (typeof problem.detail === "string") return problem.detail;
+  if (problem.detail?.message) return problem.detail.message;
+  return problem.title ?? `请求失败（HTTP ${status}）`;
+}
+
 async function getJson<T>(path: string): Promise<T> {
   const response = await fetch(path, {
     headers: { Accept: "application/json" },
@@ -616,7 +633,7 @@ async function getJson<T>(path: string): Promise<T> {
   if (!response.ok) {
     const problem = (await response.json().catch(() => ({}))) as ProblemDetails;
     throw new ApiError(
-      problem.detail ?? problem.title ?? `请求失败（HTTP ${response.status}）`,
+      problemMessage(problem, response.status),
       response.status,
       problem.correlationId,
     );
@@ -676,7 +693,7 @@ async function parseResponse<T>(response: Response): Promise<T> {
   if (!response.ok) {
     const problem = (await response.json().catch(() => ({}))) as ProblemDetails;
     throw new ApiError(
-      problem.detail ?? problem.title ?? `请求失败（HTTP ${response.status}）`,
+      problemMessage(problem, response.status),
       response.status,
       problem.correlationId,
     );
@@ -688,6 +705,8 @@ export const getSystemStatus = () => getJson<SystemStatus>("/api/v1/system/statu
 export const getOnboardingStatus = () => getJson<OnboardingStatus>("/api/v1/onboarding");
 export const completeOnboarding = (skipped_steps: string[]) =>
   sendJson<OnboardingStatus>("/api/v1/onboarding/complete", { skipped_steps });
+export const updateOnboardingStep = (step: string, state: string) =>
+  putJson<OnboardingStatus>(`/api/v1/onboarding/steps/${step}`, { state });
 export const reopenOnboarding = () => sendJson<OnboardingStatus>("/api/v1/onboarding/reopen", {});
 export const restartService = () => sendJson<{ status: string }>("/api/v1/system/restart", {});
 export const getWorkspaceStatus = () => getJson<WorkspaceStatus>("/api/v1/workspace");
@@ -701,6 +720,8 @@ export const createWorkspace = (parent_directory: string, name: string) =>
   sendJson<{ workspace_path: string; manifest: WorkspaceStatus["manifest"]; restart_required: boolean }>(
     "/api/v1/workspace", { parent_directory, name },
   );
+export const cancelPendingWorkspace = () =>
+  deleteJson<{ cancelled: boolean }>("/api/v1/workspace/pending");
 export const exportPortableWorkspace = (include_secrets: boolean, passphrase?: string) =>
   sendJson<PortableWorkspaceExport>("/api/v1/workspace/portable-export", {
     include_secrets, passphrase: passphrase || null,
@@ -715,6 +736,10 @@ export const importPortableWorkspace = (
 };
 export const getConfiguration = () =>
   getJson<ConfigurationStatus>("/api/v1/configuration");
+export const testConfigurationCapability = (capability: string) =>
+  sendJson<ConfigurationCheckResult>(
+    `/api/v1/configuration/checks/${capability}`, {},
+  );
 export const updateConfiguration = (
   expected_revision: number, configuration: CareerConsoleConfiguration, reason: string,
 ) => putJson<ConfigurationStatus>("/api/v1/configuration", {

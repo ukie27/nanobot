@@ -94,7 +94,40 @@ def test_settings_and_workspace_api_use_workspace_owned_paths(tmp_path: Path) ->
         })
         assert created.status_code == 201, created.text
         assert created.json()["restart_required"] is True
-        assert registry.active_workspace() == (parent / "CareerConsole").resolve()
+        assert registry.active_workspace() is None
+        assert registry.pending_workspace() == (parent / "CareerConsole").resolve()
+
+
+def test_restart_callback_failure_restores_active_and_keeps_pending(
+    tmp_path: Path,
+) -> None:
+    current = tmp_path / "current"
+    candidate_parent = tmp_path / "candidate"
+    registry = BootstrapRegistry(tmp_path / "machine" / "bootstrap.json")
+    manager = WorkspaceManager(registry)
+    current_manifest = manager.ensure(current)
+    registry.activate(current, current_manifest.workspace_id)
+    candidate = manager.create(candidate_parent, activate=False)
+    candidate_root = candidate_parent / "CareerConsole"
+    registry.stage_pending(candidate_root, candidate.workspace_id)
+
+    settings = CareerSettings(data_dir=current)
+    app = create_app(settings)
+    with TestClient(app) as client:
+        client.app.state.workspace_manager = manager
+
+        def failed_restart() -> None:
+            raise OSError("simulated exec failure")
+
+        client.app.state.restart_callback = failed_restart
+        response = client.post("/api/v1/system/restart")
+        assert response.status_code == 202
+        import time
+
+        time.sleep(0.5)
+        assert registry.active_workspace() == current.resolve()
+        assert registry.pending_workspace() == candidate_root.resolve()
+        assert "simulated exec failure" in (registry.last_switch_error() or "")
 
 
 def test_workspace_api_uses_replaceable_native_directory_picker(

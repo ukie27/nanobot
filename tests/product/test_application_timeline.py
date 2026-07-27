@@ -181,6 +181,26 @@ def test_application_event_stream_material_snapshot_and_idempotency(tmp_path: Pa
         assert stale.json()["code"] == "version_conflict"
 
 
+def test_finalizing_material_advances_existing_application_to_ready(tmp_path: Path) -> None:
+    settings = CareerSettings(data_dir=tmp_path / "career")
+    with TestClient(create_app(settings)) as client:
+        _confirmed_fact(client)
+        job = _job(client)
+        created = client.post("/api/v1/applications", json={"job_post_id": job["id"]})
+        assert created.status_code == 201, created.text
+        assert created.json()["current_status"] == "preparing_materials"
+
+        material = _final_material(client, job["id"])
+        refreshed = client.get(f"/api/v1/applications/{created.json()['id']}")
+
+        assert refreshed.status_code == 200, refreshed.text
+        application = refreshed.json()
+        assert application["current_status"] == "ready_to_apply"
+        assert application["version"] == 2
+        assert application["available_final_materials"][0]["id"] == material["id"]
+        assert application["events"][-1]["to_status"] == "ready_to_apply"
+
+
 def test_event_proposal_review_audit_and_archive(tmp_path: Path) -> None:
     settings = CareerSettings(data_dir=tmp_path / "career")
     with TestClient(create_app(settings)) as client:
@@ -222,6 +242,10 @@ def test_event_proposal_review_audit_and_archive(tmp_path: Path) -> None:
         assert duplicate_proposal.json()["id"] == proposed["id"]
         tasks = client.get("/api/v1/application-review-tasks").json()
         assert tasks["total"] == 1
+        unified_review = client.get("/api/v1/runtime/reviews").json()["items"][0]
+        assert unified_review["target_url"] == (
+            f"/applications/{application['id']}?review={proposed['id']}"
+        )
 
         resolved = client.post(
             f"/api/v1/application-event-proposals/{proposed['id']}/resolve",

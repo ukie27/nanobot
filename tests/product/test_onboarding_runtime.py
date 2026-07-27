@@ -7,9 +7,26 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+from career_console.infrastructure.secrets import InMemorySecretStore
 from career_console.infrastructure.settings import CareerSettings
 from career_console.infrastructure.workspace import OnboardingService
 from career_console.interfaces.http import create_app
+
+OPTIONAL_ONBOARDING_STEPS = (
+    "provider",
+    "profile",
+    "recruitment_sources",
+    "mail",
+    "channel",
+    "scheduler",
+)
+
+
+def complete_onboarding_service(service: OnboardingService) -> None:
+    service.update_step("workspace", "configured")
+    for step in OPTIONAL_ONBOARDING_STEPS:
+        service.update_step(step, "skipped")
+    service.complete(skipped_steps=list(OPTIONAL_ONBOARDING_STEPS))
 
 
 def test_onboarding_service_persists_validated_completion(tmp_path: Path) -> None:
@@ -17,14 +34,30 @@ def test_onboarding_service_persists_validated_completion(tmp_path: Path) -> Non
     service = OnboardingService(path)
 
     assert service.is_complete() is False
+    service.update_step("workspace", "configured")
+    service.update_step("provider", "configured")
+    for step in ("profile", "recruitment_sources", "mail", "channel", "scheduler"):
+        service.update_step(step, "skipped")
     record = service.complete(skipped_steps=["mail", "profile", "mail"])
 
     assert service.is_complete() is True
-    assert record.skipped_steps == ["mail", "profile"]
+    assert record.skipped_steps == [
+        "channel",
+        "mail",
+        "profile",
+        "recruitment_sources",
+        "scheduler",
+    ]
     payload = json.loads(path.read_text(encoding="utf-8"))
     assert payload["schemaVersion"] == "career-console.onboarding.v1"
     assert payload["completedAt"] is not None
-    assert payload["skippedSteps"] == ["mail", "profile"]
+    assert payload["skippedSteps"] == [
+        "channel",
+        "mail",
+        "profile",
+        "recruitment_sources",
+        "scheduler",
+    ]
 
     try:
         service.complete(skipped_steps=["unknown"])
@@ -45,19 +78,55 @@ def test_onboarding_api_transitions_between_bootstrap_and_product(
         assert initial.json()["completed"] is False
         assert initial.json()["workspace_ready"] is True
 
+        for step in OPTIONAL_ONBOARDING_STEPS:
+            response = client.put(
+                f"/api/v1/onboarding/steps/{step}",
+                json={"state": "skipped"},
+            )
+            assert response.status_code == 200, response.text
+
         completed = client.post(
             "/api/v1/onboarding/complete",
-            json={"skipped_steps": ["mail", "mail", "channel"]},
+            json={"skipped_steps": list(OPTIONAL_ONBOARDING_STEPS)},
         )
         assert completed.status_code == 200
         assert completed.json()["runtime_mode"] == "product"
-        assert completed.json()["skipped_steps"] == ["channel", "mail"]
+        assert completed.json()["skipped_steps"] == sorted(OPTIONAL_ONBOARDING_STEPS)
         assert completed.json()["restart_required"] is True
 
         reopened = client.post("/api/v1/onboarding/reopen", json={})
         assert reopened.status_code == 200
         assert reopened.json()["runtime_mode"] == "bootstrap"
         assert reopened.json()["completed"] is False
+
+
+def test_mail_capability_means_configured_not_polling_enabled(tmp_path: Path) -> None:
+    settings = CareerSettings(data_dir=tmp_path / "workspace")
+    with TestClient(create_app(settings)) as client:
+        secrets = InMemorySecretStore()
+        client.app.state.secret_store = secrets
+        client.app.state.mail_service.secrets = secrets
+
+        configured = client.put(
+            "/api/v1/mail/account",
+            json={
+                "enabled": False,
+                "email_address": "candidate@example.com",
+                "host": "imap.example.com",
+                "port": 993,
+                "username": "candidate@example.com",
+                "password": "app-password",
+                "folder": "INBOX",
+                "initial_lookback_days": 30,
+                "poll_interval_minutes": 10,
+            },
+        )
+
+        assert configured.status_code == 200, configured.text
+        assert configured.json()["configured"] is True
+        assert configured.json()["enabled"] is False
+        status = client.get("/api/v1/onboarding").json()
+        assert status["capabilities"]["mail"] is True
 
 
 def test_bootstrap_workspace_must_be_replaced_before_completion(
@@ -111,8 +180,8 @@ def test_scheduler_loop_is_gated_by_onboarding(
 
     product_settings = CareerSettings(data_dir=tmp_path / "product")
     product_settings.ensure_directories()
-    OnboardingService(
-        product_settings.config_dir / "onboarding.json"
-    ).complete(skipped_steps=[])
+    complete_onboarding_service(
+        OnboardingService(product_settings.config_dir / "onboarding.json")
+    )
     with TestClient(create_app(product_settings)):
         assert calls == ["started"]

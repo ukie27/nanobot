@@ -9,12 +9,15 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
-from career_console.infrastructure.database.models import AgentRunModel, ReviewTaskModel
+from career_console.infrastructure.database.models import (
+    AgentRunModel,
+    ApplicationEventProposalModel,
+    ReviewTaskModel,
+)
 
 _REVIEW_TARGETS = {
     "candidate_fact": "/review",
-    "application_event_proposal": "/application-review",
-    "mail_intelligence_item": "/mail",
+    "mail_intelligence_item": "/message-center",
     "profile_insight": "/profile",
     "strategy_snapshot": "/profile",
     "job_fit_proposal": "/job-posts",
@@ -37,14 +40,14 @@ class SqlAlchemyRuntimeGateway:
                     ReviewTaskModel.priority.desc(), ReviewTaskModel.created_at
                 )
             ).all()
-            return [self._review_view(item) for item in rows]
+            return [self._review_view(session, item) for item in rows]
 
     def get_review(self, review_id: str) -> dict[str, Any]:
         with self._session_factory() as session:
             row = session.get(ReviewTaskModel, review_id)
             if row is None:
                 raise LookupError("审查任务不存在。")
-            return self._review_view(row)
+            return self._review_view(session, row)
 
     def list_agent_runs(self, *, limit: int = 100) -> list[dict[str, Any]]:
         with self._session_factory() as session:
@@ -63,7 +66,7 @@ class SqlAlchemyRuntimeGateway:
             return self._agent_run_view(row)
 
     @classmethod
-    def _review_view(cls, row: ReviewTaskModel) -> dict[str, Any]:
+    def _review_view(cls, session: Session, row: ReviewTaskModel) -> dict[str, Any]:
         return {
             "id": row.id,
             "task_type": row.task_type,
@@ -76,7 +79,7 @@ class SqlAlchemyRuntimeGateway:
             "status": row.status,
             "version": row.version,
             "agent_run_id": row.agent_run_id,
-            "target_url": _REVIEW_TARGETS.get(row.entity_type, "/workspace"),
+            "target_url": cls._review_target(session, row),
             "created_at": cls._utc(row.created_at),
             "updated_at": cls._utc(row.updated_at or row.created_at),
             "resolved_at": cls._utc(row.resolved_at),
@@ -84,6 +87,18 @@ class SqlAlchemyRuntimeGateway:
             "resolution_reason": row.resolution_reason,
             "resolved_by": row.resolved_by,
         }
+
+    @staticmethod
+    def _review_target(session: Session, row: ReviewTaskModel) -> str:
+        if row.entity_type == "application_event_proposal":
+            proposal = session.get(ApplicationEventProposalModel, row.entity_id)
+            if proposal is not None:
+                return (
+                    f"/applications/{proposal.application_id}"
+                    f"?review={proposal.id}"
+                )
+            return "/applications"
+        return _REVIEW_TARGETS.get(row.entity_type, "/workspace")
 
     @classmethod
     def _agent_run_view(cls, row: AgentRunModel) -> dict[str, Any]:

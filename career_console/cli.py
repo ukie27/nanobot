@@ -93,24 +93,50 @@ def serve(
             "[yellow]Warning: binding all interfaces; restrict access with a host firewall "
             "or a loopback-only container port mapping.[/yellow]"
         )
-    settings = _settings(workspace).model_copy(update={"host": host, "port": port})
-    log_path = configure_logging(
-        settings.logs_dir, level=settings.log_level, verbose=verbose,
-        retention_days=settings.log_retention_days,
-    )
     import uvicorn
 
     from career_console.interfaces.http import create_app
 
-    try:
-        with CareerInstanceLock(settings.instance_lock_path):
-            console.print(f"[green]CareerConsole[/green] http://{host}:{port}")
-            console.print(f"[dim]Workspace: {settings.data_dir}[/dim]")
-            console.print(f"[dim]Logs: {log_path}[/dim]")
-            uvicorn.run(create_app(settings), host=host, port=port, log_level="info")
-    except InstanceAlreadyRunningError as exc:
-        console.print(f"[red]{exc}[/red]")
-        raise typer.Exit(1) from exc
+    selected_workspace = workspace
+    while True:
+        settings = _settings(selected_workspace).model_copy(
+            update={"host": host, "port": port}
+        )
+        log_path = configure_logging(
+            settings.logs_dir, level=settings.log_level, verbose=verbose,
+            retention_days=settings.log_retention_days,
+        )
+        runtime_app = create_app(settings)
+        restart_requested = False
+        restart_workspace = settings.data_dir
+        server = uvicorn.Server(
+            uvicorn.Config(runtime_app, host=host, port=port, log_level="info")
+        )
+
+        def request_restart() -> None:
+            nonlocal restart_requested, restart_workspace
+            restart_requested = True
+            workspace_override = getattr(
+                runtime_app.state, "restart_workspace_override", None
+            )
+            if workspace_override is not None:
+                restart_workspace = workspace_override
+            server.should_exit = True
+
+        runtime_app.state.restart_callback = request_restart
+        try:
+            with CareerInstanceLock(settings.instance_lock_path):
+                console.print(f"[green]CareerConsole[/green] http://{host}:{port}")
+                console.print(f"[dim]Workspace: {settings.data_dir}[/dim]")
+                console.print(f"[dim]Logs: {log_path}[/dim]")
+                server.run()
+        except InstanceAlreadyRunningError as exc:
+            console.print(f"[red]{exc}[/red]")
+            raise typer.Exit(1) from exc
+        if not restart_requested:
+            break
+        selected_workspace = restart_workspace
+        console.print("[dim]正在重新加载 CareerConsole…[/dim]")
 
 
 @app.command()

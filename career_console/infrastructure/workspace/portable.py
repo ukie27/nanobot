@@ -163,7 +163,8 @@ class PortableWorkspaceService:
                     previous_secrets[reference] = None
                 self.secret_store.set(reference, secret)
                 updated_secret_refs.append(reference)
-            self.manager.registry.activate(target, workspace_manifest.workspace_id)
+            self.manager.preflight(target)
+            self.manager.registry.stage_pending(target, workspace_manifest.workspace_id)
             completed = True
             return {
                 "workspace_path": str(target),

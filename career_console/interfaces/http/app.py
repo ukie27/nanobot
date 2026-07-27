@@ -289,6 +289,7 @@ def create_app(settings: CareerSettings | None = None) -> FastAPI:
         )
         app.state.channel_configuration = channel_configuration
         workspace_manager = WorkspaceManager()
+        workspace_manager.registry.finalize_committed_switch(settings.data_dir)
         app.state.workspace_manager = workspace_manager
         app.state.directory_picker = NativeDirectoryPicker()
         app.state.portable_workspace = PortableWorkspaceService(

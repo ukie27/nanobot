@@ -1,9 +1,10 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import App from "./App";
+import { DataSourceSettings } from "./SettingsPage";
 import { chinaInputToIso, isoToChinaInput } from "./time";
 
 afterEach(() => {
@@ -22,6 +23,27 @@ function renderApp(path = "/status") {
 }
 
 describe("Career app shell", () => {
+  it("keeps embedded data-source setup inside the onboarding step", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        executable: "opencli.cmd",
+        resolved_executable: "D:/tools/opencli.cmd",
+        installed: true,
+      }),
+    }));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <MemoryRouter><DataSourceSettings embedded /></MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByRole("heading", { name: "OpenCLI 应用" })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "配置牛客与 BOSS" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "配置只读邮箱" })).not.toBeInTheDocument();
+  });
+
   it("uses China Standard Time independently of the browser timezone", () => {
     expect(chinaInputToIso("2026-07-25T14:30")).toBe("2026-07-25T06:30:00.000Z");
     expect(isoToChinaInput("2026-07-25T06:30:00Z")).toBe("2026-07-25T14:30");
@@ -46,7 +68,10 @@ describe("Career app shell", () => {
   });
 
   it("renders versioned unified settings and change audit", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockImplementation((input: string) => {
+    const fetchMock = vi.fn().mockImplementation((input: string) => {
+      if (input === "/api/v1/system/session") return Promise.resolve({
+        ok: true, json: async () => ({ csrf_token: "test-token" }),
+      });
       if (input === "/api/v1/workspace") return Promise.resolve({ ok: true, json: async () => ({
         product: "CareerConsole", workspace_path: "D:/CareerConsole",
         active_workspace_path: "D:/CareerConsole", onboarding_required: false,
@@ -70,6 +95,17 @@ describe("Career app shell", () => {
         total: 1, items: [{ id: "test-1", provider_id: "main", provider_type: "openai", model: "gpt-main",
           status: "passed", error_code: null, duration_ms: 128, created_at: "2026-07-26T00:00:00Z" }],
       }) });
+      if (input === "/api/v1/configuration/agents") return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          schema_version: "career-console.configuration.v1",
+          revision: 2,
+          active_revision: 1,
+          activation_status: "restart_required",
+          changed_paths: ["agents.tasks"],
+          activation_effect: "restart_required",
+        }),
+      });
       if (input === "/api/v1/channels/qq") return Promise.resolve({ ok: true, json: async () => ({
         enabled: true, app_id: "102000000", allow_from: [], notification_targets: ["c2c:user-open-id"],
         event_subscriptions: ["task_reminder", "system_alert"], message_format: "plain", outbound_only: true,
@@ -103,33 +139,43 @@ describe("Career app shell", () => {
           scheduler: { enabled: true, poll_seconds: 60, reminders_enabled: true, connector_jobs_enabled: true, profile_maintenance_enabled: true, profile_maintenance_time: "21:30", channel_dispatch_enabled: true },
         },
       }) });
-    }));
+    });
+    vi.stubGlobal("fetch", fetchMock);
     renderApp("/settings");
-    expect(await screen.findByRole("heading", { name: "运行维护" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "常规" })).toBeInTheDocument();
     expect(screen.getByDisplayValue("Asia/Shanghai")).toBeInTheDocument();
     expect(screen.getByText("敏感日志脱敏：强制开启")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "数据与迁移" }));
-    expect(screen.getByRole("heading", { name: "迁移、导入与导出" })).toBeInTheDocument();
-    expect(screen.getByText("防 Zip Slip 与链接穿越")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "导入与导出" })).toBeInTheDocument();
+    expect(screen.getByText("防止压缩包中的路径越界")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "AI 与 Agent" }));
     expect(await screen.findByText("主模型 · gpt-main · 凭据已配置")).toBeInTheDocument();
-    expect(screen.getByText("简历撰写（Drafter）")).toBeInTheDocument();
-    expect(screen.getByText("材料复核（Reviewer）")).toBeInTheDocument();
+    expect(screen.getByText("材料撰写")).toBeInTheDocument();
+    expect(screen.getByText("材料复核")).toBeInTheDocument();
     expect(screen.getAllByPlaceholderText("已安全保存；留空保持不变").find(element => element.getAttribute("name") === "api_key")).toHaveValue("");
     expect(screen.queryByDisplayValue("career-console:workspace:provider:main:api-key")).not.toBeInTheDocument();
-    expect(await screen.findByText("main · 通过")).toBeInTheDocument();
+    expect(await screen.findByText("主模型 · 通过")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Provider ID")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "保存任务映射" }));
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/v1/configuration/agents",
+        expect.objectContaining({ method: "PUT" }),
+      );
+    });
+    expect(await screen.findByText("任务映射已保存。重启服务后应用新的 AI 运行配置。")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "通知渠道" }));
-    expect(screen.getByRole("heading", { name: "QQ 通知出口" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "QQ 通知" })).toBeInTheDocument();
     expect(await screen.findByText("凭据已配置")).toBeInTheDocument();
     expect(screen.getAllByPlaceholderText("已安全保存；留空保持不变").find(element => element.getAttribute("name") === "secret")).toHaveValue("");
     expect(screen.queryByDisplayValue("qq-secret-value")).not.toBeInTheDocument();
     expect(await screen.findByText(/c2c:sha256:123456789abc/)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "高级诊断" }));
-    expect(await screen.findByText("revision 0 → 1")).toBeInTheDocument();
+    expect(await screen.findByText("配置版本 0 → 1")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "重新进入初始化向导" })).toBeInTheDocument();
   });
 
@@ -138,6 +184,7 @@ describe("Career app shell", () => {
       if (input === "/api/v1/onboarding") return Promise.resolve({ ok: true, json: async () => ({
         schema_version: "career-console.onboarding.v1", onboarding_version: 1,
         required_version: 1, completed: false, completed_at: null, skipped_steps: [],
+        step_states: {},
         workspace_ready: false, restart_required: false, runtime_mode: "bootstrap",
         capabilities: { workspace: false, provider: false, profile: false, mail: false,
           opencli: false, channel: false, scheduler: true },
@@ -151,7 +198,7 @@ describe("Career app shell", () => {
 
     renderApp("/dashboard");
     expect(await screen.findByRole("heading", { name: "配置你的求职工作台" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "继续" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "确认工作区并继续" })).toBeDisabled();
     expect(screen.queryByRole("navigation", { name: "主导航" })).not.toBeInTheDocument();
   });
 
@@ -159,7 +206,7 @@ describe("Career app shell", () => {
     vi.stubGlobal("fetch", vi.fn().mockImplementation((input: string) => {
       if (input === "/api/v1/onboarding") return Promise.resolve({ ok: true, json: async () => ({
         completed: false, workspace_ready: true, restart_required: false,
-        runtime_mode: "bootstrap", skipped_steps: [],
+        runtime_mode: "bootstrap", skipped_steps: [], step_states: {},
         capabilities: { workspace: true, provider: false, profile: false, mail: false,
           opencli: false, channel: false, scheduler: true },
       }) });
@@ -266,13 +313,17 @@ describe("Career app shell", () => {
       }),
     }));
     renderApp("/opportunities");
-    expect(await screen.findByRole("heading", { name: "招聘机会" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "每日招聘" })).toBeInTheDocument();
     expect(await screen.findByRole("heading", { name: "网易游戏雷火 · 27届秋招" })).toBeInTheDocument();
     expect(screen.getByText("这里收录招聘项目线索，不代表具体岗位 JD")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "打开官方投递入口" })).toHaveAttribute(
       "href", "https://example.com/apply",
     );
-    expect(screen.getByRole("link", { name: "具体岗位池" })).toHaveAttribute("href", "/job-posts");
+    expect(
+      screen
+        .getAllByRole("link", { name: "目标岗位" })
+        .some((link) => link.getAttribute("href") === "/job-posts"),
+    ).toBe(true);
     expect(screen.getByRole("link", { name: "导入具体 JD" })).toHaveAttribute(
       "href", "/job-posts?opportunityId=opportunity-1",
     );
@@ -342,7 +393,7 @@ describe("Career app shell", () => {
     expect(await screen.findByRole("heading", { name: "张三 · Python 后端工程师 · 定制简历" })).toBeInTheDocument();
     expect(screen.getByText("熟练使用 Python", { selector: "blockquote" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "下载 PDF" })).toHaveAttribute("href", "/api/v1/material-exports/export/download");
-    expect(screen.getByAltText("Final PDF 第一页渲染预览")).toBeInTheDocument();
+    expect(screen.getByAltText("最终 PDF 第一页渲染预览")).toBeInTheDocument();
   });
 
   it("renders an immutable application timeline and material snapshot", async () => {
@@ -368,7 +419,7 @@ describe("Career app shell", () => {
     expect(await screen.findByRole("heading", { name: "Python 后端工程师" })).toBeInTheDocument();
     expect(screen.getAllByText("面试").length).toBeGreaterThan(0);
     expect(screen.getByText(/技术一面/)).toBeInTheDocument();
-    expect(screen.getByText("Python 定制简历 · resume")).toBeInTheDocument();
+    expect(screen.getByText("Python 定制简历 · 简历")).toBeInTheDocument();
   });
 
   it("renders the daily dashboard with reminders and schedule conflicts", async () => {
@@ -398,7 +449,7 @@ describe("Career app shell", () => {
         created_at: "2026-07-24T00:00:00Z", read_at: null }] },
     })));
     renderApp("/dashboard");
-    expect(await screen.findByRole("heading", { name: "今日 Dashboard" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "今日" })).toBeInTheDocument();
     expect(await screen.findByText("网易游戏雷火 · 27届秋招")).toBeInTheDocument();
     expect((await screen.findAllByText("参加面试 · 示例科技")).length).toBeGreaterThan(0);
     expect(screen.getByText("任务将在 60 分钟后到期。")).toBeInTheDocument();
@@ -429,17 +480,44 @@ describe("Career app shell", () => {
       }),
     })));
     renderApp("/data-sources");
-    expect(await screen.findByRole("heading", { name: "数据来源" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "招聘信息来源" })).toBeInTheDocument();
     expect(screen.getByText("只读安全边界")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "牛客校招日程" })).toBeInTheDocument();
     expect(await screen.findByDisplayValue("career")).toBeInTheDocument();
     expect(await screen.findByText("4 / 1 / 5 / 0")).toBeInTheDocument();
   });
 
-  it("renders read-only IMAP settings, cursor, and mail evidence", async () => {
+  it("explains an unavailable recruitment source without exposing codes as primary text", async () => {
     vi.stubGlobal("fetch", vi.fn().mockImplementation((input: string) => Promise.resolve({
       ok: true,
-      json: async () => String(input).includes("/messages") ? { total: 1, items: [{
+      json: async () => String(input).includes("/nowcoder") ? ({
+        id: "nowcoder", connector_type: "opencli_nowcoder", display_name: "牛客校招日程（OpenCLI）",
+        enabled: false, search_query: "", city: "全国", result_limit: 500,
+        schedule_enabled: false, schedule_times: ["09:00"], timezone: "Asia/Shanghai",
+        next_scan_at: null, health_status: "unavailable",
+        last_error_code: "opencli_not_installed", last_success_at: null, version: 1,
+        automatic_scope: "today", manual_lookback_options: [0, 7, 14, 30],
+        runs: [], quarantine: [],
+      }) : ({
+        id: "boss", connector_type: "opencli_boss", display_name: "BOSS 直聘（OpenCLI）",
+        enabled: false, profile_alias: "default", search_query: "", city: "全国",
+        result_limit: 15, schedule_enabled: false, schedule_times: ["09:00", "18:00"],
+        timezone: "Asia/Shanghai", next_scan_at: null, health_status: "unknown",
+        last_error_code: null, last_success_at: null, version: 1, runs: [], quarantine: [],
+      }),
+    })));
+    renderApp("/data-sources");
+    expect(await screen.findByText("OpenCLI 未配置")).toBeInTheDocument();
+    expect(screen.queryByText("unavailable")).not.toBeInTheDocument();
+    expect(screen.queryByText("opencli_not_installed")).not.toBeInTheDocument();
+  });
+
+  it("renders read-only IMAP settings, cursor, and mail evidence", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockImplementation((input: string, init?: RequestInit) => Promise.resolve({
+      ok: true,
+      json: async () => String(input).includes("/account/test") && init?.method === "POST" ? {
+        status: "passed", uid_validity: "42", read_only: true,
+      } : String(input).includes("/messages") ? { total: 1, items: [{
         id: "mail-1", uid: 7, sender: "HR <hr@example.com>", subject: "测试公司面试通知",
         sent_at: "2026-07-24T02:00:00Z", classification: "recruiting", event_kind: "interview",
         extracted: { company: "测试公司" }, evidence_excerpt: "岗位：Python工程师，面试时间已安排。",
@@ -458,10 +536,12 @@ describe("Career app shell", () => {
       },
     })));
     renderApp("/message-center");
-    expect(await screen.findByRole("heading", { name: "消息中心" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "招聘邮件" })).toBeInTheDocument();
     expect(screen.getByText("严格只读边界")).toBeInTheDocument();
     expect(await screen.findByText("测试公司面试通知")).toBeInTheDocument();
-    expect(screen.getByText("已创建待确认 Proposal")).toBeInTheDocument();
+    expect(screen.getByText("已创建待确认进度")).toBeInTheDocument();
     expect(screen.queryByDisplayValue("app-password")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "测试只读连接" }));
+    expect(await screen.findByText("只读邮箱连接正常，可以开始同步最近 30 天内的已读和未读邮件。")).toBeInTheDocument();
   });
 });

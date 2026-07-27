@@ -40,12 +40,12 @@ export function OpportunityPage() {
 
   return <>
     <header className="page-header">
-      <div><p className="eyebrow">RECRUITMENT OPPORTUNITIES</p><h1>招聘机会</h1></div>
+      <div><p className="eyebrow">机会线索</p><h1>每日招聘</h1></div>
       <span className="health-pill ok">{query.data?.total ?? 0} 条机会</span>
     </header>
     <section className="notice opportunity-note">
       <strong>这里收录招聘项目线索，不代表具体岗位 JD</strong>
-      <p>牛客每日同步进入机会池。关注后请从官方入口查看具体职位，再将真实 JD 导入<Link to="/job-posts">具体岗位池</Link>进行匹配和材料生成。</p>
+      <p>牛客每日同步进入机会池。关注后请从官方入口查看具体职位，再将真实 JD 导入<Link to="/job-posts">目标岗位</Link>进行匹配和材料生成。</p>
     </section>
     <div className="opportunity-filters" aria-label="机会状态筛选">
       {filters.map(([value, label]) => <button

@@ -263,9 +263,13 @@ def review_material(material_id: str, request: Request) -> dict:
 
 @router.post("/{material_id}/finalize", response_model=MaterialResponse)
 def finalize_material(material_id: str, body: FinalizeMaterialRequest, request: Request) -> dict:
-    return request.app.state.material_service.finalize(
+    material = request.app.state.material_service.finalize(
         material_id, expected_version=body.expected_version
     )
+    request.app.state.application_service.mark_job_ready(
+        job_post_id=material["job_post_id"]
+    )
+    return material
 
 
 @export_router.get("/{export_id}/download", response_class=FileResponse)

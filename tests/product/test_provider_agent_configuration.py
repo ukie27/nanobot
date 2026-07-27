@@ -57,6 +57,7 @@ def test_provider_secret_is_external_and_agent_task_resolves(tmp_path: Path) -> 
 
         status = client.get("/api/v1/configuration").json()
         agents = status["configuration"]["agents"]
+        agents["tasks"]["job_fit"]["enabled"] = True
         agents["tasks"]["job_fit"]["provider_id"] = "main"
         agents["tasks"]["job_fit"]["model"] = "gpt-review"
         mapped = client.put("/api/v1/configuration/agents", json={

@@ -68,7 +68,7 @@ class ProviderConfiguration(StrictModel):
 
 
 class AgentTaskConfiguration(StrictModel):
-    enabled: bool = True
+    enabled: bool = False
     provider_id: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9_-]{1,63}$")
     model: str | None = Field(default=None, max_length=200)
     temperature: float = Field(default=0.1, ge=0, le=2)
@@ -214,10 +214,10 @@ class SchedulerConfiguration(StrictModel):
     enabled: bool = True
     poll_seconds: int = Field(default=60, ge=10, le=3600)
     reminders_enabled: bool = True
-    connector_jobs_enabled: bool = True
-    profile_maintenance_enabled: bool = True
+    connector_jobs_enabled: bool = False
+    profile_maintenance_enabled: bool = False
     profile_maintenance_time: str = "21:30"
-    channel_dispatch_enabled: bool = True
+    channel_dispatch_enabled: bool = False
 
     @field_validator("profile_maintenance_time")
     @classmethod
@@ -247,8 +247,18 @@ class CareerConsoleConfiguration(StrictModel):
             if provider.secret_ref and not provider.secret_ref.endswith(expected_suffix):
                 raise ValueError(f"Provider secret_ref does not belong to {provider_id}.")
         for task_name, task in self.agents.tasks:
-            if task.provider_id and task.provider_id not in self.providers:
-                raise ValueError(f"Agent task {task_name} references an unknown provider.")
+            if task.enabled and not task.provider_id:
+                raise ValueError(f"Enabled agent task {task_name} requires a provider.")
+            if task.provider_id:
+                provider = self.providers.get(task.provider_id)
+                if provider is None:
+                    raise ValueError(
+                        f"Agent task {task_name} references an unknown provider."
+                    )
+                if task.enabled and not provider.enabled:
+                    raise ValueError(
+                        f"Enabled agent task {task_name} requires an enabled provider."
+                    )
         imap_ref = self.connectors.imap.secret_ref
         if imap_ref and not imap_ref.endswith(":connector:imap:password"):
             raise ValueError("IMAP secret_ref does not belong to the IMAP connector.")

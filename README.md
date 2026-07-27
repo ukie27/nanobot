@@ -26,6 +26,8 @@ CareerConsole 是本地优先的 AI 求职工作台。它围绕用户职业档�
 
 `workspace create`、`setup` 和 `doctor` 保留给运维、自动化和故障修复，普通用户首次使用不需要预先执行。也可用已安装的入口运行 `career-console serve`。
 
+当前交付形态仍是源码开发启动，不是最终 Windows 安装包。服务内的工作区切换采用同进程重启：切换前会执行目录、数据库和写入检查，启动失败时回滚激活记录，但尚不具备由独立 Launcher 提供的“双实例启动、确认新实例 ready 后再关闭旧实例”能力。
+
 详细说明见：
 
 - [文档索引](docs/README.md)
@@ -47,7 +49,7 @@ npm run build
 
 ## 数据与安全
 
-CareerConsole 默认只绑定本机地址。密钥不得写入普通配置、日志或默认导出。工作区切换不进行运行时热切换；创建并激活新工作区后必须重启服务。
+CareerConsole 默认只绑定本机地址。密钥不得写入普通配置、日志或默认导出。工作区切换不进行数据库热切换；创建新工作区后由服务重启应用，失败时继续保留原工作区激活记录。最终桌面交付仍需要独立 Launcher 提供更强的进程级 ready 切换保障。
 
 发布边界统一使用 `CareerConsole`、`career_console`、`career-console` 和
 `CAREER_CONSOLE_`。业务代码遵守 Domain → Application → Infrastructure/Interfaces

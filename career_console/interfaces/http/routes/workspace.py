@@ -54,13 +54,18 @@ def workspace_status(request: Request) -> dict:
         else None
     )
     active = manager.registry.active_workspace()
+    pending = manager.registry.pending_workspace()
     return {
         "product": "CareerConsole",
         "workspace_path": str(paths.root),
         "manifest": manifest,
         "active_workspace_path": str(active) if active else None,
+        "pending_workspace_path": str(pending) if pending else None,
+        "last_switch_error": manager.registry.last_switch_error(),
         "onboarding_required": active is None,
-        "restart_required": active is not None and active != paths.root,
+        "restart_required": pending is not None or (
+            active is not None and active != paths.root
+        ),
         "paths": {
             "config": str(paths.config), "data": str(paths.data),
             "database": str(paths.database), "secrets": str(paths.secrets),
@@ -102,18 +107,28 @@ def pick_directory(body: PickDirectoryRequest, request: Request) -> dict:
 def create_workspace(body: CreateWorkspaceRequest, request: Request) -> dict:
     manager: WorkspaceManager = request.app.state.workspace_manager
     try:
-        manifest = manager.create(Path(body.parent_directory), name=body.name, activate=True)
+        manifest = manager.create(
+            Path(body.parent_directory), name=body.name, activate=False
+        )
     except (OSError, ValueError) as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail={"code": "workspace_invalid", "message": str(exc)},
         ) from exc
-    root = manager.registry.active_workspace()
+    root = Path(body.parent_directory).expanduser().resolve(strict=False) / "CareerConsole"
+    manager.registry.stage_pending(root, manifest.workspace_id)
     return {
         "workspace_path": str(root),
         "manifest": manifest.model_dump(mode="json", by_alias=True),
-        "restart_required": root != request.app.state.settings.data_dir,
+        "restart_required": root.resolve() != request.app.state.settings.data_dir,
     }
+
+
+@router.delete("/pending")
+def cancel_pending_workspace(request: Request) -> dict:
+    manager: WorkspaceManager = request.app.state.workspace_manager
+    manager.registry.cancel_pending()
+    return {"cancelled": True}
 
 
 @router.post("/portable-export")
