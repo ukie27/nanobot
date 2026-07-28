@@ -69,6 +69,7 @@ def review_material(
     blocks: list[MaterialBlock],
     snapshots: list[FactSnapshot],
     *,
+    material_type: MaterialType | None = None,
     uncovered_requirement_count: int = 0,
     hard_gap_count: int = 0,
 ) -> list[MaterialFinding]:
@@ -138,6 +139,22 @@ def review_material(
             findings.append(
                 MaterialFinding(
                     "error", "unsupported_number", "表达中出现了事实快照没有支持的数字。", block.id
+                )
+            )
+    if material_type == MaterialType.RESUME:
+        referenced_snapshot_ids = {
+            snapshot_id for block in blocks for snapshot_id in block.fact_snapshot_ids
+        }
+        referenced_facts = {
+            snapshot.fact_id for snapshot in snapshots if snapshot.id in referenced_snapshot_ids
+        }
+        populated_sections = {block.section for block in blocks if block.text.strip()}
+        if len(referenced_facts) < 2 or len(populated_sections) < 2:
+            findings.append(
+                MaterialFinding(
+                    "error",
+                    "resume_incomplete",
+                    "简历内容过少。至少需要两个不同类别的已确认事实，例如教育/经历与技能；请先完善个人档案。",
                 )
             )
     if uncovered_requirement_count:

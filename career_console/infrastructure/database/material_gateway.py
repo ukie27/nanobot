@@ -32,6 +32,7 @@ from career_console.infrastructure.database.models import (
     JobMatchEvidenceModel,
     JobPostModel,
     JobPostVersionModel,
+    JobRequirementModel,
     MaterialDraftModel,
     MaterialExportModel,
     MaterialReviewModel,
@@ -95,6 +96,24 @@ class SqlAlchemyMaterialGateway:
                 .where(JobPostVersionModel.job_post_id == post.id)
                 .order_by(JobPostVersionModel.version_number.desc())
             )
+            requirement_count = session.scalar(
+                select(func.count())
+                .select_from(JobRequirementModel)
+                .where(JobRequirementModel.job_post_version_id == job_version.id)
+            )
+            analysis = session.scalar(
+                select(JobMatchAnalysisModel)
+                .where(
+                    JobMatchAnalysisModel.job_post_id == post.id,
+                    JobMatchAnalysisModel.job_post_version_id == job_version.id,
+                )
+                .order_by(JobMatchAnalysisModel.created_at.desc())
+            )
+            if not requirement_count or analysis is None:
+                raise CareerDomainError(
+                    "岗位尚未提取出有效要求，请先重新分析岗位。",
+                    code="job_analysis_required",
+                )
             company = session.get(CompanyModel, post.company_id)
             facts = session.scalars(
                 select(CandidateFactModel)
@@ -521,6 +540,7 @@ class SqlAlchemyMaterialGateway:
         findings = review_material(
             blocks,
             snapshots,
+            material_type=MaterialType(draft.material_type),
             uncovered_requirement_count=len(matched_fact_ids - referenced_fact_ids),
             hard_gap_count=analysis.must_gap_count if analysis else 0,
         )

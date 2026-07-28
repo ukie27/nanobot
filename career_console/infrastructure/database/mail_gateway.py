@@ -109,7 +109,20 @@ class SqlAlchemyMailGateway:
                     setattr(account, key, value)
             account.updated_at = now
             session.commit()
-        return self.get()
+            return self.get()
+
+    def record_health(self, *, status: str, error_code: str | None) -> None:
+        now = datetime.now(UTC)
+        with self._session_factory() as session:
+            connector = session.get(ConnectorConfigModel, IMAP_CONNECTOR_ID)
+            if connector is None:
+                raise LookupError("只读邮箱 Connector 不存在。")
+            connector.health_status = status[:32]
+            connector.last_error_code = error_code[:120] if error_code else None
+            if status == "healthy":
+                connector.last_success_at = now
+            connector.updated_at = now
+            session.commit()
 
     def delete_account(self) -> str | None:
         with self._session_factory() as session:
@@ -377,6 +390,16 @@ class SqlAlchemyMailGateway:
 
     def save_message(self, **values: Any) -> tuple[dict[str, Any], bool]:
         now = datetime.now(UTC)
+        if values["classification"] == "unrelated":
+            values = {
+                **values,
+                "event_kind": None,
+                "extracted": {},
+                "evidence_excerpt": None,
+                "body_hash": None,
+                "attachments": [],
+                "body_fetched": False,
+            }
         with self._session_factory() as session:
             account = session.scalar(
                 select(ImapAccountModel).where(ImapAccountModel.connector_id == IMAP_CONNECTOR_ID)
@@ -576,6 +599,8 @@ class SqlAlchemyMailGateway:
     def _add_intelligence_item(
         session, analysis, agent_run_id: str, now: datetime, **values: Any
     ) -> None:
+        values["occurred_at"] = SqlAlchemyMailGateway._utc(values.get("occurred_at"))
+        values["scheduled_at"] = SqlAlchemyMailGateway._utc(values.get("scheduled_at"))
         row = MailIntelligenceItemModel(
             id=str(uuid4()), analysis_id=analysis.id, status="pending", version=1,
             resolution_reason=None, created_at=now, resolved_at=None, **values,

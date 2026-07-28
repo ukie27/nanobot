@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { NavLink, Navigate, Route, Routes } from "react-router-dom";
+import { useState, type ReactNode } from "react";
+import { NavLink, Navigate, Route, Routes, useLocation } from "react-router-dom";
 
 import { ApiError, cancelBackgroundJob, getBackgroundJobs, getOnboardingStatus, getSystemStatus, retryBackgroundJob } from "./api";
 import { ApplicationDetailPage, ApplicationReviewPage, ApplicationsPage } from "./ApplicationPages";
@@ -29,26 +30,72 @@ function Brand() {
   );
 }
 
+type NavigationGroupProps = {
+  label: string;
+  paths: string[];
+  children: ReactNode;
+  onNavigate: () => void;
+};
+
+function NavigationGroup({ label, paths, children, onNavigate }: NavigationGroupProps) {
+  const location = useLocation();
+  const active = paths.some(path => location.pathname === path || location.pathname.startsWith(`${path}/`));
+  return (
+    <details className="nav-group" open={active}>
+      <summary className={active ? "active" : ""}>{label}</summary>
+      <div className="nav-group-links" onClick={onNavigate}>{children}</div>
+    </details>
+  );
+}
+
 function ProductLayout() {
+  const [mobileNavigationOpen, setMobileNavigationOpen] = useState(false);
+  const closeNavigation = () => setMobileNavigationOpen(false);
   return (
     <div className="app-shell">
-      <aside className="sidebar">
+      <a className="skip-link" href="#main-content">跳到主要内容</a>
+      <header className="mobile-header">
         <Brand />
-        <div className="career-track" aria-label="求职行动轨道">
-          {["机会", "准备", "投递", "面试", "结果"].map((item, index) =>
-            <span key={item}><i>{index + 1}</i>{item}</span>,
-          )}
-        </div>
+        <button
+          type="button"
+          className="mobile-menu-button secondary"
+          aria-expanded={mobileNavigationOpen}
+          aria-controls="primary-sidebar"
+          onClick={() => setMobileNavigationOpen(open => !open)}
+        >
+          {mobileNavigationOpen ? "关闭" : "菜单"}
+        </button>
+      </header>
+      {mobileNavigationOpen && <button className="sidebar-backdrop" aria-label="关闭导航" onClick={closeNavigation} />}
+      <aside id="primary-sidebar" className={`sidebar ${mobileNavigationOpen ? "mobile-open" : ""}`}>
+        <div className="desktop-brand"><Brand /></div>
+        <p className="navigation-intro">按求职任务组织功能。当前要做什么，就从对应分组进入。</p>
         <nav aria-label="主导航">
-          <span className="nav-label">概览</span><NavLink to="/dashboard">今日</NavLink><NavLink to="/workspace">求职进展</NavLink>
-          <span className="nav-label">机会</span><NavLink to="/opportunities">每日招聘</NavLink><NavLink to="/job-posts">目标岗位</NavLink>
-          <span className="nav-label">投递</span><NavLink to="/applications">申请进度</NavLink><NavLink to="/tasks">任务与日程</NavLink><NavLink to="/interviews">面试</NavLink>
-          <span className="nav-label">我的材料</span><NavLink to="/profile">职业档案</NavLink><NavLink to="/materials">简历与申请材料</NavLink><NavLink to="/documents">资料来源</NavLink><NavLink to="/review">事实审查</NavLink>
-          <span className="nav-label">收件箱</span><NavLink to="/message-center">招聘邮件</NavLink><NavLink to="/reviews">待我确认</NavLink>
-          <span className="nav-label">系统</span><NavLink to="/settings">设置</NavLink>
+          <NavLink to="/dashboard" onClick={closeNavigation}>今日</NavLink>
+          <NavigationGroup label="机会" paths={["/opportunities", "/job-posts"]} onNavigate={closeNavigation}>
+            <NavLink to="/opportunities">每日招聘</NavLink>
+            <NavLink to="/job-posts">目标岗位</NavLink>
+          </NavigationGroup>
+          <NavigationGroup label="申请" paths={["/workspace", "/applications", "/tasks", "/interviews"]} onNavigate={closeNavigation}>
+            <NavLink to="/workspace">申请总览</NavLink>
+            <NavLink to="/applications">申请进度</NavLink>
+            <NavLink to="/tasks">任务与日程</NavLink>
+            <NavLink to="/interviews">面试中心</NavLink>
+          </NavigationGroup>
+          <NavigationGroup label="我的资料" paths={["/profile", "/materials", "/documents"]} onNavigate={closeNavigation}>
+            <NavLink to="/profile">我的经历</NavLink>
+            <NavLink to="/materials">简历与申请材料</NavLink>
+            <NavLink to="/documents">导入资料</NavLink>
+          </NavigationGroup>
+          <NavigationGroup label="消息与确认" paths={["/message-center", "/reviews", "/review"]} onNavigate={closeNavigation}>
+            <NavLink to="/message-center">招聘邮件</NavLink>
+            <NavLink to="/reviews">待我确认</NavLink>
+            <NavLink to="/review">简历内容确认</NavLink>
+          </NavigationGroup>
+          <NavLink to="/settings" onClick={closeNavigation}>设置</NavLink>
         </nav>
       </aside>
-      <main className="content">
+      <main className="content" id="main-content" tabIndex={-1}>
         <Routes>
           <Route path="/" element={<Navigate to="/dashboard" replace />} />
           <Route path="/dashboard" element={<DashboardPage />} />
@@ -67,7 +114,7 @@ function ProductLayout() {
           <Route path="/applications/:id" element={<ApplicationDetailPage />} />
           <Route path="/application-review" element={<ApplicationReviewPage />} />
           <Route path="/tasks" element={<TasksPage />} />
-          <Route path="/data-sources" element={<DataSourcesPage />} />
+          <Route path="/data-sources" element={<Navigate to="/settings?section=sources" replace />} />
           <Route path="/message-center" element={<MessageCenterPage />} />
           <Route path="/interviews" element={<InterviewCenterPage />} />
           <Route path="/interviews/:id" element={<InterviewDetailPage />} />
@@ -86,7 +133,7 @@ function NotFoundPage() {
   return <section className="not-found">
     <span>404</span>
     <h1>这个页面不存在</h1>
-    <p>链接可能已经变更。返回今日页面继续，或从左侧导航选择目标功能。</p>
+    <p>链接可能已经变更。返回今日页面继续，或从菜单选择目标功能。</p>
     <NavLink className="download-button" to="/dashboard">返回今日</NavLink>
   </section>;
 }
@@ -128,12 +175,12 @@ function StatusPage() {
           </section>
           <section className="panel">
             <div className="panel-heading"><div><p className="eyebrow">数据目录</p><h2>本地数据位置</h2></div><span>仅保存在本机</span></div>
-            <dl className="path-list">
-              <div><dt>数据目录</dt><dd>{query.data.paths.data_dir}</dd></div>
+            <dl className="path-list"><div><dt>数据目录</dt><dd>{query.data.paths.data_dir}</dd></div></dl>
+            <details className="audit-details"><summary>查看内部存储位置</summary><dl className="path-list">
               <div><dt>数据库</dt><dd>{query.data.paths.database}</dd></div>
               <div><dt>日志</dt><dd>{query.data.paths.logs}</dd></div>
               <div><dt>备份</dt><dd>{query.data.paths.backups}</dd></div>
-            </dl>
+            </dl></details>
           </section>
         </>
       )}
@@ -146,6 +193,21 @@ function JobsPage() {
   const query = useQuery({ queryKey: ["background-jobs"], queryFn: getBackgroundJobs });
   const retry = useMutation({ mutationFn: retryBackgroundJob, onSuccess: async () => { await client.invalidateQueries({ queryKey: ["background-jobs"] }); } });
   const cancel = useMutation({ mutationFn: cancelBackgroundJob, onSuccess: async () => { await client.invalidateQueries({ queryKey: ["background-jobs"] }); } });
+  const jobTypeLabels: Record<string, string> = {
+    connector_sync: "数据来源同步",
+    mail_sync: "招聘邮箱同步",
+    document_parse: "资料解析",
+    agent_task: "智能分析",
+    material_generation: "申请材料生成",
+    notification_dispatch: "通知发送",
+  };
+  const jobStatusLabels: Record<string, string> = {
+    pending: "等待处理",
+    running: "处理中",
+    succeeded: "已完成",
+    failed: "失败",
+    cancelled: "已取消",
+  };
   return (
     <>
       <header className="page-header">
@@ -161,7 +223,7 @@ function JobsPage() {
       )}
       {query.data && query.data.total > 0 && (
         <section className="panel table-wrap"><table><thead><tr><th>类型</th><th>状态</th><th>尝试次数</th><th>创建时间</th></tr></thead>
-          <tbody>{query.data.items.map((job) => <tr key={job.id}><td>{job.job_type}</td><td>{job.status}</td><td>{job.attempt_count}/{job.max_attempts}</td><td>{formatChinaTime(job.created_at)}（北京时间）</td><td>{["failed", "cancelled"].includes(job.status) && <button onClick={() => retry.mutate(job.id)}>重试</button>}{["pending", "running"].includes(job.status) && <button className="danger" onClick={() => cancel.mutate(job.id)}>取消</button>}</td></tr>)}</tbody>
+          <tbody>{query.data.items.map((job) => <tr key={job.id}><td>{jobTypeLabels[job.job_type] ?? job.job_type}</td><td>{jobStatusLabels[job.status] ?? job.status}</td><td>{job.attempt_count}/{job.max_attempts}</td><td>{formatChinaTime(job.created_at)}（北京时间）</td><td>{["failed", "cancelled"].includes(job.status) && <button onClick={() => retry.mutate(job.id)}>重试</button>}{["pending", "running"].includes(job.status) && <button className="danger" onClick={() => cancel.mutate(job.id)}>取消</button>}</td></tr>)}</tbody>
         </table></section>
       )}
     </>

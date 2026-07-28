@@ -308,7 +308,7 @@ def test_sync_batch_limit_advances_cursor_only_through_processed_uids(monkeypatc
 
     assert [message["uid"] for message in result["messages"]] == [1, 2]
     assert result["last_uid"] == 2
-    assert len([call for call in fake.calls if call[:2] == ("uid", "fetch")]) == 4
+    assert len([call for call in fake.calls if call[:2] == ("uid", "fetch")]) == 2
 
 
 def test_uidvalidity_change_restarts_with_bounded_date_search(monkeypatch) -> None:
@@ -352,7 +352,7 @@ def test_missing_uidvalidity_is_rejected_before_cursor_can_advance(monkeypatch) 
     assert not any(call[:2] == ("uid", "search") for call in fake.calls)
 
 
-def test_unrelated_header_does_not_prevent_agent_evidence_fetch(monkeypatch) -> None:
+def test_unrelated_header_is_kept_minimal_without_body_fetch(monkeypatch) -> None:
     fake = UnrelatedFakeImap()
     monkeypatch.setattr("imaplib.IMAP4_SSL", lambda host, port, timeout=None: fake)
 
@@ -369,9 +369,12 @@ def test_unrelated_header_does_not_prevent_agent_evidence_fetch(monkeypatch) -> 
 
     message = result["messages"][0]
     assert message["classification"] == "unrelated"
-    assert message["body_fetched"] is True
+    assert message["body_fetched"] is False
     assert message["evidence_excerpt"] is None
-    assert len([call for call in fake.calls if call[:2] == ("uid", "fetch")]) == 2
+    assert message["body_hash"] is None
+    assert message["attachments"] == []
+    assert message["extracted"] == {}
+    assert len([call for call in fake.calls if call[:2] == ("uid", "fetch")]) == 1
 
 
 def test_prompt_injection_text_cannot_expand_readonly_imap_commands(monkeypatch) -> None:
@@ -482,6 +485,9 @@ def test_api_config_sync_cursor_and_message_center_without_secret_leak(tmp_path:
         assert "app-password" not in response.text
         assert response.json()["account"]["credential_configured"] is True
         assert client.post("/api/v1/mail/account/test").json()["read_only"] is True
+        tested_state = client.get("/api/v1/mail/account").json()
+        assert tested_state["health_status"] == "healthy"
+        assert tested_state["last_error_code"] is None
         run = client.post("/api/v1/mail/sync")
         assert run.status_code == 200
         assert run.json()["created_count"] == 1

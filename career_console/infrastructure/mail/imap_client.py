@@ -45,8 +45,12 @@ class StdlibReadOnlyImapClient:
             for uid in uids:
                 raw_header, message_size = self._fetch(client, uid, self.HEADER_QUERY)
                 parsed = parse_header(raw_header[: self.MAX_HEADER_BYTES])
+                should_fetch_body = parsed["classification"] in {
+                    "recruiting",
+                    "possibly_related",
+                }
                 within_limit = message_size is None or message_size <= self.MAX_MESSAGE_BYTES
-                if within_limit:
+                if should_fetch_body and within_limit:
                     raw_message, _ = self._fetch(client, uid, "(BODY.PEEK[] RFC822.SIZE)")
                     if len(raw_message) <= self.MAX_MESSAGE_BYTES:
                         parsed = parse_message(raw_message)

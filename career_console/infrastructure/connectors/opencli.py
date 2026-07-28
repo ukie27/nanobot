@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
+import signal
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -44,7 +46,10 @@ class OpenCliProcessRunner:
         return result.strip()
 
     def boss_status(self, *, profile: str) -> dict[str, Any]:
-        return self._object(self._run(profile, "whoami", []))
+        # A health check must return quickly enough to remain useful in an
+        # interactive settings form. Login has its own longer, user-controlled
+        # timeout; whoami should never hold the UI for the general 45 seconds.
+        return self._object(self._run(profile, "whoami", [], timeout=15))
 
     def boss_login(self, *, profile: str, timeout: int = 300) -> dict[str, Any]:
         return self._object(
@@ -123,38 +128,66 @@ class OpenCliProcessRunner:
     def _execute(self, args: list[str], *, timeout: int, structured: bool) -> str:
         if not self.executable:
             raise OpenCliError(ConnectorError.NOT_INSTALLED, "未找到 OpenCLI 可执行程序。")
+        creationflags = (
+            subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
+        )
         try:
-            result = subprocess.run(
+            process = subprocess.Popen(
                 [*self._command_prefix(), *args],
-                capture_output=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 text=True,
                 encoding="utf-8",
                 errors="replace",
-                timeout=timeout,
-                check=False,
                 shell=False,
+                creationflags=creationflags,
+                start_new_session=os.name != "nt",
             )
+            stdout, stderr = process.communicate(timeout=timeout)
         except subprocess.TimeoutExpired as exc:
+            self._terminate_process_tree(process)
             raise OpenCliError(ConnectorError.TIMEOUT, "OpenCLI 执行超时。") from exc
         except OSError as exc:
             raise OpenCliError(ConnectorError.NOT_INSTALLED, "OpenCLI 无法启动。") from exc
-        if result.returncode:
+        if process.returncode:
             code = {
                 2: ConnectorError.INVALID_ARGUMENT,
                 69: ConnectorError.BRIDGE_UNAVAILABLE,
                 75: ConnectorError.TIMEOUT,
                 77: ConnectorError.AUTH_REQUIRED,
                 78: ConnectorError.BRIDGE_UNAVAILABLE,
-            }.get(result.returncode, ConnectorError.EXECUTION_FAILED)
+            }.get(process.returncode, ConnectorError.EXECUTION_FAILED)
             message = "OpenCLI 命令执行失败。"
             if structured:
                 try:
-                    envelope = json.loads(result.stderr or result.stdout)
+                    envelope = json.loads(stderr or stdout)
                     message = str(envelope.get("error", {}).get("message") or message)
                 except (json.JSONDecodeError, AttributeError):
                     pass
             raise OpenCliError(str(code), message)
-        return result.stdout.strip()
+        return stdout.strip()
+
+    @staticmethod
+    def _terminate_process_tree(process: subprocess.Popen[str]) -> None:
+        """Stop command shims and their descendants without leaving pipe holders."""
+        if os.name == "nt":
+            subprocess.run(
+                ["taskkill", "/pid", str(process.pid), "/t", "/f"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+        else:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        try:
+            process.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.communicate()
 
     def _command_prefix(self) -> list[str]:
         path = Path(self.executable)
@@ -165,18 +198,10 @@ class OpenCliProcessRunner:
                 raise OpenCliError(ConnectorError.NOT_INSTALLED, "OpenCLI 需要 Node.js。")
             return [node, self.executable]
         if suffix in {".cmd", ".bat"}:
-            powershell_script = path.with_suffix(".ps1")
-            powershell = shutil.which("pwsh.exe") or shutil.which("powershell.exe")
-            if powershell and powershell_script.is_file():
-                return [
-                    powershell,
-                    "-NoProfile",
-                    "-NonInteractive",
-                    "-ExecutionPolicy",
-                    "Bypass",
-                    "-File",
-                    str(powershell_script),
-                ]
+            # npm command shims are executable through cmd.exe. Do not probe the
+            # sibling .ps1 shim first: managed Windows environments can allow
+            # executing the configured .cmd while denying metadata access to
+            # files in the user's AppData directory.
             command = shutil.which("cmd.exe") or "cmd.exe"
             return [command, "/d", "/s", "/c", self.executable]
         return [self.executable]

@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState, type FormEvent } from "react";
-import { Link } from "react-router-dom";
+import { useSearchParams } from "react-router-dom";
 
 import {
   configureQQChannel,
@@ -43,6 +43,8 @@ import {
   type ConfigurationStatus,
 } from "./api";
 import { ConfigurationTestButton } from "./ConfigurationTest";
+import { DataSourcesPage } from "./ConnectorPages";
+import { MessageCenterPage } from "./MailPages";
 import { formatChinaTime } from "./time";
 
 function applyAppearance(configuration: CareerConsoleConfiguration) {
@@ -102,22 +104,25 @@ function ConfigurationForm({ status, advanced = false }: { status: Configuration
     save.mutate({ configuration, reason: advanced ? "用户更新高级运行参数" : "用户更新常规设置" });
   }
   const item = status.configuration;
+  const today = new Date();
+  const dateDash = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+  const dateSlash = dateDash.replaceAll("-", "/");
   return <form onSubmit={submit} className="settings-stack">
     {!advanced && <><section className="panel"><div className="panel-heading"><div><p className="eyebrow">语言与时间</p><h2>常规</h2></div><span>保存后立即生效</span></div><div className="form-grid">
       <label>界面语言<select name="locale" defaultValue={item.general.locale}><option value="zh-CN">简体中文</option><option value="en-US">English</option></select></label>
       <label>业务时区<input name="timezone" defaultValue={item.general.timezone} required /></label>
-      <label>日期格式<select name="date_format" defaultValue={item.general.date_format}><option value="yyyy-MM-dd">2026-07-26</option><option value="yyyy/MM/dd">2026/07/26</option></select></label>
+      <label>日期格式<select name="date_format" defaultValue={item.general.date_format}><option value="yyyy-MM-dd">{dateDash}</option><option value="yyyy/MM/dd">{dateSlash}</option></select></label>
       <label className="check-row"><input type="checkbox" name="open_browser_on_start" defaultChecked={item.general.open_browser_on_start} />启动后自动打开浏览器</label>
-    </div><ConfigurationTestButton capability="general" label="测试常规设置" /></section>
+    </div></section>
     <section className="panel"><div><p className="eyebrow">界面偏好</p><h2>外观</h2></div><div className="form-grid">
       <label>界面密度<select name="density" defaultValue={item.appearance.density}><option value="comfortable">舒适</option><option value="compact">紧凑</option></select></label>
       <label className="check-row"><input type="checkbox" name="reduce_motion" defaultChecked={item.appearance.reduce_motion} />减少界面动效</label>
-    </div><ConfigurationTestButton capability="appearance" label="测试外观设置" /></section>
-    <section className="panel"><div><p className="eyebrow">本地数据保护</p><h2>隐私与安全</h2></div><div className="security-grid"><label className="check-row"><input type="checkbox" name="diagnostics_metadata_enabled" defaultChecked={item.privacy.diagnostics_metadata_enabled} />保存不含业务正文的诊断元数据</label><p>敏感日志脱敏：强制开启</p><p>仅绑定本机网络：强制开启</p><p>配置文件不会保存 API Key、Token 或邮箱授权码。</p></div><ConfigurationTestButton capability="privacy" label="测试安全设置" /></section></>}
+    </div></section>
+    <section className="panel"><div><p className="eyebrow">本地数据保护</p><h2>隐私与安全</h2></div><div className="security-grid"><label className="check-row"><input type="checkbox" name="diagnostics_metadata_enabled" defaultChecked={item.privacy.diagnostics_metadata_enabled} />保存不含业务正文的诊断元数据</label><p>敏感日志脱敏：强制开启</p><p>仅绑定本机网络：强制开启</p><p>配置文件不会保存 API Key、Token 或邮箱授权码。</p></div></section></>}
     {advanced && <section className="panel advanced-settings-card"><div><p className="eyebrow">高级运行参数</p><h2>运行维护</h2></div><p className="section-note">这些参数用于日志、审计和后台任务故障处理。修改后可能需要重启服务。</p><div className="form-grid">
       <label>日志级别<select name="log_level" defaultValue={item.runtime.log_level}>{["DEBUG", "INFO", "WARNING", "ERROR"].map(value => <option key={value}>{value}</option>)}</select></label>
       <label>日志保留天数<input name="log_retention_days" type="number" min="1" max="365" defaultValue={item.runtime.log_retention_days} /></label>
-      <label>Agent 审计保留天数<input name="agent_trace_retention_days" type="number" min="1" max="3650" defaultValue={item.runtime.agent_trace_retention_days} /></label>
+      <label>智能功能审计保留天数<input name="agent_trace_retention_days" type="number" min="1" max="3650" defaultValue={item.runtime.agent_trace_retention_days} /></label>
       <label>后台任务租约（秒）<input name="job_lease_seconds" type="number" min="10" max="3600" defaultValue={item.runtime.job_lease_seconds} /></label>
       <label>单个文档上限（MB）<input name="max_document_mb" type="number" min="1" max="50" defaultValue={item.runtime.max_document_mb} /></label>
     </div><ConfigurationTestButton capability="runtime" label="测试运行环境" /></section>}
@@ -145,6 +150,7 @@ export function ProviderAgentConfiguration({ status }: { status: ConfigurationSt
       client.invalidateQueries({ queryKey: ["providers"] }),
       client.invalidateQueries({ queryKey: ["provider-tests"] }),
       client.invalidateQueries({ queryKey: ["configuration-changes"] }),
+      client.invalidateQueries({ queryKey: ["onboarding"] }),
     ]);
   };
   const currentRevision = () =>
@@ -175,7 +181,7 @@ export function ProviderAgentConfiguration({ status }: { status: ConfigurationSt
     mutationFn: (id: string) => deleteProvider(id, currentRevision()),
     onMutate: () => setProviderNotice(""),
     onSuccess: async () => {
-      setProviderNotice("Provider 已删除。");
+      setProviderNotice("AI 服务已删除。");
       await refresh();
     },
   });
@@ -186,7 +192,7 @@ export function ProviderAgentConfiguration({ status }: { status: ConfigurationSt
     mutationFn: (agents: AgentConfiguration) => updateAgentConfiguration(currentRevision(), agents),
     onMutate: () => setAgentNotice(""),
     onSuccess: () => {
-      setAgentNotice("任务映射已保存。重启服务后应用新的 AI 运行配置。");
+      setAgentNotice("高级模型分配已保存。重启服务后应用新的 AI 运行配置。");
       void refresh();
     },
   });
@@ -219,36 +225,42 @@ export function ProviderAgentConfiguration({ status }: { status: ConfigurationSt
   }
   const providerItems = providers.data?.items ?? [];
   return <div className="settings-stack provider-settings">
-    <section className="panel"><div className="panel-heading"><div><p className="eyebrow">模型服务</p><h2>AI 服务</h2></div><span>{providerItems.length} 个</span></div>
-      <p className="section-note">API Key 只写入操作系统凭据库；保存后不会回显，也不会进入工作区配置或审计记录。</p>
+    <section className="panel"><div className="panel-heading"><div><p className="eyebrow">智能功能</p><h2>AI 服务</h2></div><span>{providerItems.length} 个</span></div>
+      <p className="section-note">通常只需要选择服务商、填写模型名称和 API Key。密钥只保存在操作系统凭据库中。</p>
       {providerItems.map(item => <details className="provider-editor" key={item.id}><summary>{item.display_name} · {item.default_model} · {item.has_secret ? "凭据已配置" : "未配置凭据"}</summary>
         <form className="form-grid" onSubmit={event => providerSubmit(event, item.id)}>
           <label>服务商<select name="provider_type" defaultValue={item.provider_type}>{catalog.data?.items.map(option => <option value={option.type} key={option.type}>{option.label}</option>)}</select></label>
-          <label>显示名称<input name="display_name" defaultValue={item.display_name} required /></label>
-          <label className="wide">API URL<input name="api_base" defaultValue={item.api_base ?? ""} placeholder="留空使用 Provider 默认地址" /></label>
+          <label>在界面中的名称<input name="display_name" defaultValue={item.display_name} required /></label>
           <label>默认模型<input name="default_model" defaultValue={item.default_model} required /></label>
-          <label>可选模型（逗号或换行分隔）<textarea name="models" defaultValue={item.models.join("\n")} /></label>
           <label>更新 API Key<input name="api_key" type="password" autoComplete="new-password" placeholder={item.has_secret ? "已安全保存；留空保持不变" : "输入 API Key"} /></label>
           <label className="check-row"><input name="enabled" type="checkbox" defaultChecked={item.enabled} />启用此 AI 服务</label>
+          <details className="wide inline-advanced"><summary>高级连接设置</summary><div className="form-grid">
+            <label className="wide">服务连接地址<input name="api_base" defaultValue={item.api_base ?? ""} placeholder="留空使用服务商默认地址" /></label>
+            <label className="wide">可选模型（逗号或换行分隔）<textarea name="models" defaultValue={item.models.join("\n")} /></label>
+          </div></details>
           <div className="form-actions"><button value="save-test" disabled={saveProvider.isPending}>保存并测试</button><button value="save" className="secondary" disabled={saveProvider.isPending}>仅保存</button><button type="button" className="secondary" onClick={() => runTest.mutate(item.id)} disabled={runTest.isPending}>重新测试</button><button type="button" className="secondary" onClick={() => removeProvider.mutate(item.id)} disabled={removeProvider.isPending}>删除</button></div>
         </form></details>)}
       <details className="provider-editor"><summary>新增 AI 服务</summary><form className="form-grid" onSubmit={providerSubmit}>
         <label>服务商<select name="provider_type" defaultValue="openai">{catalog.data?.items.map(option => <option value={option.type} key={option.type}>{option.label}</option>)}</select></label>
-        <label>显示名称<input name="display_name" required placeholder="例如：主模型" /></label><label>API URL<input name="api_base" placeholder="留空自动使用服务商默认地址" /></label>
-        <label>默认模型<input name="default_model" required /></label><label>可选模型<textarea name="models" /></label>
+        <label>在界面中的名称<input name="display_name" required placeholder="例如：主要 AI 服务" /></label>
+        <label>默认模型<input name="default_model" required placeholder="例如：gpt-5-mini" /></label>
         <label>API Key<input name="api_key" type="password" autoComplete="new-password" /></label>
         <label className="check-row"><input name="enabled" type="checkbox" defaultChecked />启用此 AI 服务</label>
+        <details className="wide inline-advanced"><summary>高级连接设置</summary><div className="form-grid">
+          <label className="wide">服务连接地址<input name="api_base" placeholder="留空自动使用服务商默认地址" /></label>
+          <label className="wide">可选模型<textarea name="models" /></label>
+        </div></details>
         <div className="form-actions"><button value="save-test" disabled={saveProvider.isPending}>{saveProvider.isPending ? "正在保存并测试…" : "保存并测试"}</button><button value="save" className="secondary" disabled={saveProvider.isPending}>仅保存</button></div>
       </form></details>
       {(saveProvider.error || removeProvider.error || runTest.error) && (() => { const error = saveProvider.error ?? removeProvider.error ?? runTest.error; return <p className="form-error">{error?.message}{error instanceof ApiError && error.correlationId ? `（关联 ID：${error.correlationId}）` : ""}</p>; })()}
       {providerNotice && <div className="notice success"><strong>{providerNotice}</strong></div>}
       {runTest.data && <div className={`notice ${runTest.data.status === "passed" ? "success" : "error"}`}><strong>{runTest.data.status === "passed" ? "连接测试通过" : "连接测试失败"}</strong><p>{runTest.data.model} · {runTest.data.duration_ms}ms{runTest.data.error_code ? ` · ${runTest.data.error_code}` : ""}</p></div>}
     </section>
-    <section className="panel"><div><p className="eyebrow">任务分配</p><h2>AI 任务模型映射</h2></div><p className="section-note">推荐先使用统一模型；需要控制成本或交叉复核时再逐项调整。</p>
+    <details className="panel settings-disclosure"><summary><span><small>高级设置</small><strong>按任务选择不同模型</strong></span><em>普通使用无需调整</em></summary><p className="section-note">默认让所有智能功能使用同一个 AI 服务。只有需要控制成本或使用不同模型复核时，才逐项调整。</p>
       <form onSubmit={agentSubmit}><div className="agent-mapping-list">{(Object.keys(TASK_LABELS) as AgentTaskName[]).map(name => {
         const task = status.configuration.agents.tasks[name];
         const providerRevision = providerItems.map(provider => provider.id).join(",");
-        return <div className="agent-mapping-row" key={`${name}:${providerRevision}`}><label className="check-row"><input type="checkbox" name={`${name}.enabled`} defaultChecked={task.enabled} />{TASK_LABELS[name]}</label><label>Provider<select name={`${name}.provider_id`} defaultValue={task.provider_id ?? ""}><option value="">未配置</option>{providerItems.map(provider => <option value={provider.id} key={provider.id}>{provider.display_name}</option>)}</select></label><label>模型<input name={`${name}.model`} defaultValue={task.model ?? ""} placeholder="留空使用默认模型" /></label></div>;
+        return <div className="agent-mapping-row" key={`${name}:${providerRevision}`}><label className="check-row"><input type="checkbox" name={`${name}.enabled`} defaultChecked={task.enabled} />{TASK_LABELS[name]}</label><label>AI 服务<select name={`${name}.provider_id`} defaultValue={task.provider_id ?? ""}><option value="">未配置</option>{providerItems.map(provider => <option value={provider.id} key={provider.id}>{provider.display_name}</option>)}</select></label><label>指定模型<input name={`${name}.model`} defaultValue={task.model ?? ""} placeholder="留空使用默认模型" /></label></div>;
       })}</div><div className="form-actions"><button type="button" className="secondary" disabled={!providerItems.length} onClick={event => {
         const form = event.currentTarget.form;
         const providerId = providerItems.find(item => item.enabled)?.id ?? providerItems[0]?.id ?? "";
@@ -259,10 +271,10 @@ export function ProviderAgentConfiguration({ status }: { status: ConfigurationSt
           if (enabled) enabled.checked = true;
           if (provider) provider.value = providerId;
         });
-        setAgentNotice("已应用统一模型预设，请保存并测试任务映射。");
-      }}>应用统一模型（推荐）</button><button disabled={saveAgents.isPending}>{saveAgents.isPending ? "正在保存…" : "保存任务映射"}</button><span>保存后需重新加载 AI 运行环境</span></div>{agentNotice && <div className={`notice ${agentNotice.startsWith("无法") ? "error" : "success"}`}><strong>{agentNotice}</strong></div>}{saveAgents.error && <p className="form-error">{saveAgents.error.message}{saveAgents.error instanceof ApiError && saveAgents.error.correlationId ? `（关联 ID：${saveAgents.error.correlationId}）` : ""}</p>}</form>
-      <ConfigurationTestButton capability="agent_routing" label="测试任务映射" />
-    </section>
+        setAgentNotice("已让所有智能功能使用同一个 AI 服务，请保存并测试。");
+      }}>全部使用同一个 AI 服务</button><button disabled={saveAgents.isPending}>{saveAgents.isPending ? "正在保存…" : "保存高级分配"}</button><span>保存后需重新加载智能功能</span></div>{agentNotice && <div className={`notice ${agentNotice.startsWith("无法") ? "error" : "success"}`}><strong>{agentNotice}</strong></div>}{saveAgents.error && <p className="form-error">{saveAgents.error.message}{saveAgents.error instanceof ApiError && saveAgents.error.correlationId ? `（关联 ID：${saveAgents.error.correlationId}）` : ""}</p>}</form>
+      <ConfigurationTestButton capability="agent_routing" label="测试模型分配" />
+    </details>
     <section className="panel"><div className="panel-heading"><div><p className="eyebrow">连接记录</p><h2>最近测试</h2></div><span>{tests.data?.total ?? 0} 条</span></div>{tests.data?.items.map(item => {
       const provider = providerItems.find(candidate => candidate.id === item.provider_id);
       return <article className="change-row" key={item.id}><strong>{provider?.display_name ?? "已删除的服务商"} · {item.status === "passed" ? "通过" : "失败"}</strong><span>{item.model} · {item.duration_ms}ms{item.error_code ? ` · ${item.error_code}` : ""}</span><small>{formatChinaTime(item.created_at)}（北京时间）</small></article>;
@@ -305,8 +317,8 @@ export function ChannelSettings({ status }: { status: ConfigurationStatus }) {
       <details className="wide"><summary>查看目标填写格式</summary><p><code>c2c:用户OpenID</code> 用于个人通知，<code>group:群OpenID</code> 用于群通知。</p></details>
       <fieldset className="wide channel-events"><legend>事件订阅</legend>{[["task_reminder", "任务提醒"], ["application_update", "申请进度"], ["daily_digest", "每日摘要"], ["system_alert", "系统告警"]].map(([name, label]) => <label className="check-row" key={name}><input type="checkbox" name={`event.${name}`} defaultChecked={config.event_subscriptions.includes(name)} />{label}</label>)}</fieldset>
       <label className="check-row"><input type="checkbox" name="quiet_enabled" defaultChecked={config.quiet_hours.enabled} />启用免打扰</label><label>免打扰开始<input name="quiet_start" type="time" defaultValue={config.quiet_hours.start} /></label><label>免打扰结束<input name="quiet_end" type="time" defaultValue={config.quiet_hours.end} /></label>
-      <div className="form-actions wide"><button disabled={save.isPending}>保存 QQ 配置</button><button className="secondary" type="button" onClick={() => test.mutate()} disabled={test.isPending || !config.enabled}>发送测试通知</button><button className="secondary" type="button" onClick={() => remove.mutate()} disabled={remove.isPending}>删除配置</button></div>
-      {!config.enabled && <p className="section-note wide">请先启用 QQ 通知，填写 App ID、App Secret 和通知目标并保存，再发送测试通知。</p>}
+      <div className="form-actions wide"><button disabled={save.isPending}>保存 QQ 配置</button><button className="secondary" type="button" onClick={() => test.mutate()} disabled={test.isPending || !config.enabled || !qq.data?.has_secret || !config.notification_targets.length}>发送测试通知</button>{(qq.data?.has_secret || config.app_id) && <button className="secondary" type="button" onClick={() => remove.mutate()} disabled={remove.isPending}>删除配置</button>}</div>
+      {(!config.enabled || !qq.data?.has_secret || !config.notification_targets.length) && <p className="disabled-reason wide">发送测试通知前，需要启用 QQ 通知、保存 App ID 与 App Secret，并至少配置一个通知目标。</p>}
     </form>{(save.error || test.error || remove.error) && <p className="form-error">{(save.error ?? test.error ?? remove.error)?.message}</p>}{test.data && <div className={`notice ${test.data.status === "passed" ? "success" : "error"}`}><strong>{test.data.status === "passed" ? "测试通知已发送" : "测试发送失败"}</strong><p>{test.data.target_masked} · {test.data.duration_ms}ms{test.data.error_code ? ` · ${test.data.error_code}` : ""}</p></div>}
   </section><section className="panel"><div className="panel-heading"><div><p className="eyebrow">发送审计</p><h2>通知发送记录</h2></div><span>{deliveries.data?.total ?? 0} 条</span></div>{(deliveries.data?.items ?? []).map(item => <article className="change-row" key={item.id}><strong>QQ · {item.status === "passed" ? "成功" : "失败"}</strong><span>{item.event_type} · {item.target_masked} · {item.duration_ms}ms</span><small>{item.error_code ?? `${formatChinaTime(item.created_at)}（北京时间）`}</small></article>)}</section></div>;
 }
@@ -336,14 +348,22 @@ export function SchedulerSettings({ status }: { status: ConfigurationStatus }) {
   const statusLabels: Record<string, string> = {
     completed: "已完成",
     succeeded: "已完成",
+    partial: "部分完成",
     failed: "失败",
     running: "运行中",
     skipped: "已跳过",
   };
+  const meaningfulRuns = (runs.data?.items ?? []).filter(run => {
+    const counters = Object.values(run.counters);
+    return run.status === "failed" || run.status === "partial" || run.error_codes.length > 0
+      || counters.some(value => value > 0);
+  });
   return <div className="settings-stack provider-settings"><section className="panel"><div className="panel-heading"><div><p className="eyebrow">北京时间运行</p><h2>自动任务</h2></div><span>Asia/Shanghai</span></div><p className="section-note">统一控制任务提醒、邮件轮询、牛客当天同步、档案维护与通知分发。失败会隔离记录，不会阻断其他任务。</p><form className="form-grid" onSubmit={event => { event.preventDefault(); save.mutate(new FormData(event.currentTarget)); }}>
-    <label className="check-row"><input name="enabled" type="checkbox" defaultChecked={item.enabled} />启用自动任务服务</label><label>检查周期（秒）<input name="poll_seconds" type="number" min="10" max="3600" defaultValue={item.poll_seconds} /></label>
-    <label className="check-row"><input name="reminders_enabled" type="checkbox" defaultChecked={item.reminders_enabled} />任务与日程提醒</label><label className="check-row"><input name="connector_jobs_enabled" type="checkbox" defaultChecked={item.connector_jobs_enabled} />邮箱与招聘数据源</label><label className="check-row"><input name="profile_maintenance_enabled" type="checkbox" defaultChecked={item.profile_maintenance_enabled} />每日档案维护</label><label>档案维护时间<input name="profile_maintenance_time" type="time" defaultValue={item.profile_maintenance_time} /></label><label className="check-row"><input name="channel_dispatch_enabled" type="checkbox" defaultChecked={item.channel_dispatch_enabled} />向 Channel 分发通知</label><div className="form-actions"><button disabled={save.isPending}>保存 Scheduler</button></div>
-  </form>{save.error && <p className="form-error">{save.error.message}</p>}<ConfigurationTestButton capability="scheduler" label="测试自动任务配置" /></section><section className="panel"><div className="panel-heading"><div><p className="eyebrow">运行记录</p><h2>最近自动任务</h2></div><span>{runs.data?.total ?? 0} 条</span></div>{(runs.data?.items ?? []).map(run => <article className="change-row" key={run.id}><strong>{triggerLabels[run.trigger_type] ?? run.trigger_type} · {statusLabels[run.status] ?? run.status}</strong><span>提醒 {run.counters.reminders_triggered ?? 0} · 数据来源 {run.counters.connector_runs_processed ?? 0} · 通知 {run.counters.channel_sent ?? 0}</span><small>{run.error_codes.join("、") || `${formatChinaTime(run.started_at)}（北京时间）`}</small></article>)}</section></div>;
+    <label className="check-row"><input name="enabled" type="checkbox" defaultChecked={item.enabled} />启用自动任务服务</label>
+    <label className="check-row"><input name="reminders_enabled" type="checkbox" defaultChecked={item.reminders_enabled} />发送任务与日程提醒</label><label className="check-row"><input name="connector_jobs_enabled" type="checkbox" defaultChecked={item.connector_jobs_enabled} />同步招聘信息与邮箱</label><label className="check-row"><input name="profile_maintenance_enabled" type="checkbox" defaultChecked={item.profile_maintenance_enabled} />每天整理职业档案</label><label>档案整理时间<input name="profile_maintenance_time" type="time" defaultValue={item.profile_maintenance_time} /></label><label className="check-row"><input name="channel_dispatch_enabled" type="checkbox" defaultChecked={item.channel_dispatch_enabled} />向已配置的通知渠道发送提醒</label>
+    <details className="wide inline-advanced"><summary>高级运行频率</summary><label>后台检查周期（秒）<input name="poll_seconds" type="number" min="10" max="3600" defaultValue={item.poll_seconds} /></label></details>
+    <div className="form-actions"><button disabled={save.isPending}>{save.isPending ? "正在保存…" : "保存自动任务设置"}</button></div>
+  </form>{save.error && <p className="form-error">{save.error.message}</p>}<ConfigurationTestButton capability="scheduler" label="测试自动任务配置" /></section><section className="panel"><div className="panel-heading"><div><p className="eyebrow">有效运行</p><h2>最近自动任务</h2></div><span>{meaningfulRuns.length} 条</span></div>{meaningfulRuns.length ? meaningfulRuns.map(run => <article className="change-row" key={run.id}><strong>{triggerLabels[run.trigger_type] ?? run.trigger_type} · {statusLabels[run.status] ?? run.status}</strong><span>提醒 {run.counters.reminders_triggered ?? 0} · 数据来源 {run.counters.connector_runs_processed ?? 0} · 通知 {run.counters.channel_sent ?? 0}</span><small>{run.error_codes.join("、") || `${formatChinaTime(run.started_at)}（北京时间）`}</small></article>) : <div className="quiet-state"><strong>自动任务服务运行正常</strong><p>最近没有产生提醒、数据同步、通知或错误。空检查记录已隐藏。</p></div>}<details className="audit-details"><summary>关于空检查记录</summary><p>后台仍会按设置周期检查任务；没有产生业务结果的心跳不会显示在这里。</p></details></section></div>;
 }
 
 export function DataSourceSettings({ embedded = false }: { embedded?: boolean }) {
@@ -354,7 +374,7 @@ export function DataSourceSettings({ embedded = false }: { embedded?: boolean })
     setNotice("OpenCLI 路径已保存。");
     await Promise.all([client.invalidateQueries({ queryKey: ["opencli-configuration"] }), client.invalidateQueries({ queryKey: ["configuration"] }), client.invalidateQueries({ queryKey: ["onboarding"] })]);
   } });
-  return <section className="panel provider-settings"><div className="panel-heading"><div><p className="eyebrow">招聘来源依赖</p><h2>OpenCLI 应用</h2></div><span>{opencli.data?.installed ? "OpenCLI 可用" : "OpenCLI 未检测到"}</span></div><p className="section-note">这里只配置外部 OpenCLI 的可执行文件；牛客、BOSS 和只读邮箱使用各自独立的配置表单。</p><form className="form-grid" onSubmit={event => { event.preventDefault(); save.mutate(String(new FormData(event.currentTarget).get("executable") || "")); }}><label className="wide">OpenCLI 可执行文件<input name="executable" defaultValue={opencli.data?.executable ?? ""} placeholder="留空自动从 PATH 查找；也可填写 opencli.cmd 绝对路径" /></label><div className="form-actions wide"><button disabled={save.isPending}>{save.isPending ? "正在保存…" : "保存 OpenCLI 路径"}</button>{!embedded && <><Link className="download-button secondary" to="/data-sources">配置牛客与 BOSS</Link><Link className="download-button secondary" to="/message-center">配置只读邮箱</Link></>}</div></form>{opencli.data?.resolved_executable && <p className="section-note">当前解析路径：{opencli.data.resolved_executable}</p>}{notice && <div className="notice success"><strong>{notice}</strong></div>}{save.error && <p className="form-error">{save.error.message}</p>}<ConfigurationTestButton capability="opencli" label="测试 OpenCLI" /></section>;
+  return <section className="panel provider-settings settings-anchor-card" id="source-opencli" tabIndex={-1}><div className="panel-heading"><div><p className="eyebrow">招聘来源依赖</p><h2>OpenCLI 应用</h2></div><span>{opencli.data?.installed ? "OpenCLI 可用" : "OpenCLI 未检测到"}</span></div><p className="section-note">OpenCLI 是牛客和 BOSS 数据来源所需的外部应用。通常安装后会自动识别，无需手工填写路径。</p><details className="inline-advanced" open={!opencli.data?.installed}><summary>高级：指定 OpenCLI 可执行文件</summary><form className="form-grid" onSubmit={event => { event.preventDefault(); save.mutate(String(new FormData(event.currentTarget).get("executable") || "")); }}><label className="wide">可执行文件路径<input name="executable" defaultValue={opencli.data?.executable ?? ""} placeholder="留空时从 PATH 自动查找" /></label><div className="form-actions wide"><button disabled={save.isPending}>{save.isPending ? "正在保存…" : "保存路径"}</button></div></form>{opencli.data?.resolved_executable && <p className="section-note">当前解析路径：{opencli.data.resolved_executable}</p>}</details>{notice && <div className="notice success"><strong>{notice}</strong></div>}{save.error && <p className="form-error">{save.error.message}</p>}<ConfigurationTestButton capability="opencli" label="测试 OpenCLI" /></section>;
 }
 
 function WorkspaceTransfer() {
@@ -372,15 +392,14 @@ function WorkspaceTransfer() {
     <div className="workspace-grid">
       <form className="form-grid" onSubmit={event => { event.preventDefault(); const form = new FormData(event.currentTarget); createExport.mutate({ include: includeSecrets, passphrase: String(form.get("export_passphrase") || "") }); }}>
         <h3 className="wide">导出当前工作区</h3><label className="check-row wide"><input type="checkbox" name="include_secrets" checked={includeSecrets} onChange={event => setIncludeSecrets(event.currentTarget.checked)} />使用密码加密并包含已配置凭据</label>{includeSecrets && <label className="wide">导出密码（至少 12 个字符）<input type="password" name="export_passphrase" minLength={12} required autoComplete="new-password" /></label>}<div className="form-actions wide"><button disabled={createExport.isPending}>{createExport.isPending ? "正在生成…" : "生成迁移包"}</button></div>
-        {createExport.data && <div className="notice success wide"><strong>迁移包已通过哈希封装</strong><p>{createExport.data.filename} · {(createExport.data.size_bytes / 1024 / 1024).toFixed(2)} MiB · {createExport.data.file_count} 个文件</p><a className="download-button" href={createExport.data.download_url}>下载迁移包</a></div>}{createExport.error && <p className="form-error wide">{createExport.error.message}</p>}
+        {createExport.data && <div className="notice success wide"><strong>迁移包已完成完整性校验</strong><p>{createExport.data.filename} · {(createExport.data.size_bytes / 1024 / 1024).toFixed(2)} MiB · {createExport.data.file_count} 个文件</p><a className="download-button" href={createExport.data.download_url}>下载迁移包</a></div>}{createExport.error && <p className="form-error wide">{createExport.error.message}</p>}
       </form>
       <form className="form-grid" onSubmit={event => { event.preventDefault(); const form = new FormData(event.currentTarget); const file = form.get("workspace_archive"); if (file instanceof File) runImport.mutate({ file, parent: String(form.get("import_parent")), passphrase: String(form.get("import_passphrase") || "") }); }}>
-        <h3 className="wide">恢复到新工作区</h3><label className="wide">迁移包<input type="file" name="workspace_archive" accept=".ccworkspace,application/zip" required /></label><label className="wide">新工作区父目录<input name="import_parent" required placeholder="例如 D:\CareerRestore" /></label><label className="wide">迁移包密码（普通包留空）<input type="password" name="import_passphrase" autoComplete="current-password" /></label><div className="form-actions wide"><button disabled={runImport.isPending}>{runImport.isPending ? "正在校验并恢复…" : "校验并导入"}</button></div>
+        <h3 className="wide">恢复到新工作区</h3><label className="file-picker wide"><input type="file" name="workspace_archive" aria-label="选择迁移包" accept=".ccworkspace,application/zip" required /><span>选择迁移包</span></label><label className="wide">新工作区父目录<input name="import_parent" required placeholder="例如 D:\CareerRestore" /></label><label className="wide">迁移包密码（普通包留空）<input type="password" name="import_passphrase" autoComplete="current-password" /></label><p className="section-note wide">导入会创建一个新工作区，不会覆盖当前工作区。校验通过后才会恢复文件。</p><div className="form-actions wide"><button disabled={runImport.isPending}>{runImport.isPending ? "正在校验并恢复…" : "校验并导入"}</button></div>
         {runImport.data && <div className="notice success wide"><strong>新工作区已恢复并激活</strong><p>{runImport.data.workspace_path} · 凭据 {runImport.data.secrets_restored} 项</p>{runImport.data.restart_required && <p>请重启 CareerConsole 切换到恢复后的工作区。</p>}</div>}{runImport.error && <p className="form-error wide">{runImport.error.message}</p>}
       </form>
     </div><div className="security-grid"><p>防止压缩包中的路径越界</p><p>限制异常文件数量、大小和压缩比</p><p>导入前检查数据库完整性和版本</p><p>凭据使用强加密保护</p></div>
     <details><summary>查看安全校验的工程细节</summary><p>包括 Zip Slip/链接穿越防护、SQLite quick_check、PBKDF2 密钥派生和 AES-256-GCM 加密。</p></details>
-    <div className="configuration-test-row"><ConfigurationTestButton capability="portable_export" label="测试导出条件" /><ConfigurationTestButton capability="portable_import" label="测试导入入口" /></div>
   </section>;
 }
 
@@ -434,7 +453,7 @@ function DataGovernance() {
 
 export function SettingsPage() {
   const client = useQueryClient();
-  const [section, setSection] = useState<"general" | "ai" | "sources" | "notifications" | "automation" | "data" | "advanced">("general");
+  const [searchParams, setSearchParams] = useSearchParams();
   const [validation, setValidation] = useState<Awaited<ReturnType<typeof validateWorkspace>> | null>(null);
   const [workspaceParent, setWorkspaceParent] = useState("");
   const workspace = useQuery({ queryKey: ["workspace"], queryFn: getWorkspaceStatus });
@@ -461,16 +480,39 @@ export function SettingsPage() {
   }, onSuccess: () => window.setTimeout(() => window.location.reload(), 1_500) });
   function submitWorkspace(event: FormEvent<HTMLFormElement>) { event.preventDefault(); const data = new FormData(event.currentTarget); const parent = String(data.get("parent_directory") ?? ""); const name = String(data.get("name") ?? "CareerConsole"); if (validation?.valid && validation.parent_directory === parent) create.mutate({ parent, name }); else validate.mutate(parent); }
   const error = workspace.error ?? configuration.error ?? changes.error;
-  const sections = [["general", "常规与工作区"], ["ai", "AI 与 Agent"], ["sources", "数据来源"], ["notifications", "通知渠道"], ["automation", "自动任务"], ["data", "数据与迁移"], ["advanced", "高级诊断"]] as const;
-  return <><header className="page-header"><div><p className="eyebrow">配置中心</p><h1>设置</h1><p>按能力管理本地工作区、AI、数据来源、通知和自动任务。每项配置都可以单独测试。</p></div><span className={`health-pill ${configuration.data?.activation_status === "restart_required" ? "blocked" : "ok"}`}>{configuration.data?.activation_status === "restart_required" ? "有配置等待重启" : "配置已生效"}</span></header>
+  const sections = [["general", "基础设置"], ["ai", "AI 服务"], ["sources", "数据来源"], ["notifications", "消息通知"], ["automation", "定时任务"], ["data", "备份与迁移"], ["advanced", "高级设置"]] as const;
+  type SettingsSection = (typeof sections)[number][0];
+  const requestedSection = searchParams.get("section");
+  const section: SettingsSection = sections.some(([value]) => value === requestedSection)
+    ? requestedSection as SettingsSection
+    : "general";
+  const selectSection = (value: SettingsSection) => {
+    setSearchParams(value === "general" ? {} : { section: value });
+  };
+  return <><header className="page-header"><div><p className="eyebrow">按需要逐项设置</p><h1>设置</h1><p>日常使用通常只需配置工作区、AI 服务和招聘来源。运行参数与诊断功能集中在高级设置中。</p></div><span className={`health-pill ${configuration.data?.activation_status === "restart_required" ? "blocked" : "ok"}`}>{configuration.data?.activation_status === "restart_required" ? "有配置等待重启" : "配置已生效"}</span></header>
     {error && <p className="form-error">{error.message}</p>}
-    <nav className="settings-nav" aria-label="设置分类">{sections.map(([value, label]) => <button type="button" className={section === value ? "active" : "secondary"} onClick={() => setSection(value)} key={value}>{label}</button>)}</nav>
-    {section === "general" && <>{workspace.data && <section className="panel"><div className="panel-heading"><div><p className="eyebrow">本地数据位置</p><h2>当前工作区</h2></div><span>{workspace.data.manifest ? "正式工作区" : "临时启动工作区"}</span></div><dl className="path-list"><div><dt>根目录</dt><dd>{workspace.data.workspace_path}</dd></div><div><dt>数据库</dt><dd>{workspace.data.paths.database}</dd></div><div><dt>配置</dt><dd>{workspace.data.paths.config}</dd></div><div><dt>备份</dt><dd>{workspace.data.paths.backups}</dd></div><div><dt>导出</dt><dd>{workspace.data.paths.exports}</dd></div></dl><ConfigurationTestButton capability="workspace" label="测试当前工作区" />{workspace.data.pending_workspace_path && <div className="notice warning"><strong>新工作区等待切换</strong><p>当前：{workspace.data.active_workspace_path ?? workspace.data.workspace_path}</p><p>待切换：{workspace.data.pending_workspace_path}</p><div className="form-actions"><button type="button" disabled={switchPending.isPending} onClick={() => switchPending.mutate()}>{switchPending.isPending ? "正在切换…" : "检查并重启到新工作区"}</button><button type="button" className="secondary" disabled={cancelPending.isPending} onClick={() => cancelPending.mutate()}>取消切换</button></div></div>}{(workspace.data.last_switch_error || switchPending.error) && <div className="notice error"><strong>工作区没有切换</strong><p>{workspace.data.last_switch_error || switchPending.error?.message}</p><p>当前工作区仍保持可用。</p></div>}<details><summary>创建或切换工作区</summary><form className="form-grid workspace-switch" onSubmit={submitWorkspace}><label>父目录<div className="path-picker-row"><input name="parent_directory" required placeholder="例如 D:\CareerWorkspace" value={workspaceParent} onChange={event => { setWorkspaceParent(event.target.value); setValidation(null); }} /><button className="secondary" type="button" disabled={pickDirectory.isPending} onClick={() => pickDirectory.mutate()}>{pickDirectory.isPending ? "正在选择…" : "选择文件夹"}</button></div></label><label>工作区名称<input name="name" defaultValue="CareerConsole" required /></label><button disabled={validate.isPending || create.isPending}>{validation?.valid ? "创建为待切换工作区" : "验证目录"}</button>{validation && <div className={`notice ${validation.valid ? "success" : "error"}`}><strong>{validation.valid ? "目录可以使用" : "目录不可使用"}</strong><p>{validation.valid ? `将创建：${validation.workspace_path}` : validation.error}</p></div>}{pickDirectory.error && <p className="form-error">{pickDirectory.error.message}</p>}{create.data && <div className="notice success"><strong>工作区已创建，尚未切换</strong><p>{create.data.workspace_path}</p><p>请使用上方“检查并重启到新工作区”。切换失败时当前工作区不会改变。</p></div>}</form></details></section>}{configuration.data && <ConfigurationForm status={configuration.data} />}</>}
+    <label className="settings-nav-select">设置分类<select value={section} onChange={event => selectSection(event.target.value as SettingsSection)}>{sections.map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label>
+    <nav className="settings-nav" aria-label="设置分类">{sections.map(([value, label]) => <button type="button" className={section === value ? "active" : "secondary"} onClick={() => selectSection(value)} key={value}>{label}</button>)}</nav>
+    {section === "general" && <>{workspace.data && <section className="panel"><div className="panel-heading"><div><p className="eyebrow">本地数据位置</p><h2>当前工作区</h2></div><span>{workspace.data.manifest ? "正式工作区" : "临时启动工作区"}</span></div><dl className="path-list"><div><dt>根目录</dt><dd>{workspace.data.workspace_path}</dd></div></dl><details className="audit-details"><summary>查看工作区内部位置</summary><dl className="path-list"><div><dt>数据库</dt><dd>{workspace.data.paths.database}</dd></div><div><dt>配置</dt><dd>{workspace.data.paths.config}</dd></div><div><dt>备份</dt><dd>{workspace.data.paths.backups}</dd></div><div><dt>导出</dt><dd>{workspace.data.paths.exports}</dd></div></dl></details><ConfigurationTestButton capability="workspace" label="测试当前工作区" />{workspace.data.pending_workspace_path && <div className="notice warning"><strong>新工作区等待切换</strong><p>当前：{workspace.data.active_workspace_path ?? workspace.data.workspace_path}</p><p>待切换：{workspace.data.pending_workspace_path}</p><div className="form-actions"><button type="button" disabled={switchPending.isPending} onClick={() => switchPending.mutate()}>{switchPending.isPending ? "正在切换…" : "检查并重启到新工作区"}</button><button type="button" className="secondary" disabled={cancelPending.isPending} onClick={() => cancelPending.mutate()}>取消切换</button></div></div>}{(workspace.data.last_switch_error || switchPending.error) && <div className="notice error"><strong>工作区没有切换</strong><p>{workspace.data.last_switch_error || switchPending.error?.message}</p><p>当前工作区仍保持可用。</p></div>}<details><summary>创建或切换工作区</summary><form className="form-grid workspace-switch" onSubmit={submitWorkspace}><label>父目录<div className="path-picker-row"><input name="parent_directory" required placeholder="例如 D:\CareerWorkspace" value={workspaceParent} onChange={event => { setWorkspaceParent(event.target.value); setValidation(null); }} /><button className="secondary" type="button" disabled={pickDirectory.isPending} onClick={() => pickDirectory.mutate()}>{pickDirectory.isPending ? "正在选择…" : "选择文件夹"}</button></div></label><label>工作区名称<input name="name" defaultValue="CareerConsole" required /></label><button disabled={validate.isPending || create.isPending}>{validation?.valid ? "创建为待切换工作区" : "验证目录"}</button>{validation && <div className={`notice ${validation.valid ? "success" : "error"}`}><strong>{validation.valid ? "目录可以使用" : "目录不可使用"}</strong><p>{validation.valid ? `将创建：${validation.workspace_path}` : validation.error}</p></div>}{pickDirectory.error && <p className="form-error">{pickDirectory.error.message}</p>}{create.data && <div className="notice success"><strong>工作区已创建，尚未切换</strong><p>{create.data.workspace_path}</p><p>请使用上方“检查并重启到新工作区”。切换失败时当前工作区不会改变。</p></div>}</form></details></section>}{configuration.data && <ConfigurationForm status={configuration.data} />}</>}
     {section === "ai" && configuration.data && <ProviderAgentConfiguration status={configuration.data} />}
-    {section === "sources" && <DataSourceSettings />}
+    {section === "sources" && <div className="settings-stack source-settings">
+      <section className="panel source-settings-guide">
+        <div className="panel-heading"><div><p className="eyebrow">统一配置入口</p><h2>招聘与邮箱配置</h2></div><span>全部在本页完成</span></div>
+        <p className="section-note">按下面的顺序完成保存和测试。点击项目只会定位到本页对应表单，不会离开设置。</p>
+        <nav className="source-settings-index" aria-label="招聘与邮箱配置目录">
+          <a href="#source-opencli"><span>1</span><strong>OpenCLI</strong><small>外部应用路径与可用性</small></a>
+          <a href="#source-nowcoder"><span>2</span><strong>牛客招聘</strong><small>每日新增招聘来源</small></a>
+          <a href="#source-boss"><span>3</span><strong>BOSS</strong><small>手动定向搜索来源</small></a>
+          <a href="#source-mail"><span>4</span><strong>招聘邮箱</strong><small>只读 IMAP 连接</small></a>
+        </nav>
+      </section>
+      <DataSourceSettings embedded />
+      <DataSourcesPage setupOnly />
+      <MessageCenterPage setupOnly />
+    </div>}
     {section === "notifications" && configuration.data && <ChannelSettings status={configuration.data} />}
     {section === "automation" && configuration.data && <SchedulerSettings status={configuration.data} />}
     {section === "data" && <><WorkspaceTransfer /><DataGovernance /></>}
-    {section === "advanced" && <>{configuration.data && <ConfigurationForm status={configuration.data} advanced />}<section className="panel"><div className="panel-heading"><div><p className="eyebrow">系统诊断</p><h2>运行与诊断</h2></div><span>高级功能</span></div><p>运行状态、Agent 记录和后台任务用于排障，普通使用无需关注。</p><div className="form-actions"><a className="download-button secondary" href="/status">运行状态</a><a className="download-button secondary" href="/agent-runs">Agent 记录</a><a className="download-button secondary" href="/jobs">后台任务</a><button className="secondary" type="button" disabled={reopen.isPending} onClick={() => reopen.mutate()}>重新进入初始化向导</button></div>{reopen.error && <p className="form-error">{reopen.error.message}</p>}</section><section className="panel"><div className="panel-heading"><div><p className="eyebrow">变更审计</p><h2>配置变更历史</h2></div><span>{changes.data?.total ?? 0} 条</span></div><div>{changes.data?.items.map(item => <article className="change-row" key={item.id}><strong>配置版本 {item.previous_revision} → {item.new_revision}</strong><span>{item.reason} · {item.activation_effect === "hot_reload" ? "已即时生效" : item.activation_effect === "restart_required" ? "重启后生效" : item.activation_effect}</span><small>{item.changed_paths.join("、")} · {formatChinaTime(item.created_at)}（北京时间）</small></article>)}</div></section></>}
+    {section === "advanced" && <>{configuration.data && <ConfigurationForm status={configuration.data} advanced />}<section className="panel"><div className="panel-heading"><div><p className="eyebrow">出现问题时使用</p><h2>运行与诊断</h2></div><span>高级功能</span></div><p>服务状态、智能功能运行记录和后台任务主要用于排查问题，普通使用无需关注。</p><div className="form-actions"><a className="download-button secondary" href="/status">查看服务状态</a><a className="download-button secondary" href="/agent-runs">查看智能功能记录</a><a className="download-button secondary" href="/jobs">查看后台任务</a><button className="secondary" type="button" disabled={reopen.isPending} onClick={() => reopen.mutate()}>重新进入初始化向导</button></div>{reopen.error && <p className="form-error">{reopen.error.message}</p>}</section><section className="panel"><div className="panel-heading"><div><p className="eyebrow">设置修改记录</p><h2>配置变更历史</h2></div><span>{changes.data?.total ?? 0} 条</span></div><div>{changes.data?.items.map(item => <article className="change-row" key={item.id}><strong>配置版本 {item.previous_revision} → {item.new_revision}</strong><span>{item.reason} · {item.activation_effect === "hot_reload" ? "已即时生效" : item.activation_effect === "restart_required" ? "重启后生效" : item.activation_effect}</span><small>{item.changed_paths.join("、")} · {formatChinaTime(item.created_at)}（北京时间）</small></article>)}</div></section></>}
   </>;
 }

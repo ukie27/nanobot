@@ -1,0 +1,168 @@
+{
+  "schema_version": "career-console.configuration.v1",
+  "revision": 6,
+  "updated_at": "2026-07-28T07:58:33.414694Z",
+  "configuration": {
+    "general": {
+      "locale": "zh-CN",
+      "timezone": "Asia/Shanghai",
+      "date_format": "yyyy-MM-dd",
+      "open_browser_on_start": true
+    },
+    "appearance": {
+      "density": "comfortable",
+      "reduce_motion": false
+    },
+    "runtime": {
+      "log_level": "INFO",
+      "log_retention_days": 14,
+      "agent_trace_retention_days": 30,
+      "job_lease_seconds": 60,
+      "max_document_mb": 10
+    },
+    "privacy": {
+      "diagnostics_metadata_enabled": true,
+      "redact_sensitive_logs": true,
+      "local_only_network_binding": true
+    },
+    "providers": {
+      "provider-8226cbf4e2e8": {
+        "provider_type": "deepseek",
+        "display_name": "DeepSeek",
+        "enabled": true,
+        "api_base": "https://api.deepseek.com",
+        "default_model": "deepseek-v4-flash",
+        "models": [
+          "deepseek-v4-flash",
+          "deepseek-v4-pro"
+        ],
+        "secret_ref": "career-console:292f850a-fbbc-4927-825a-d4255427c671:provider:provider-8226cbf4e2e8:api-key"
+      }
+    },
+    "agents": {
+      "tasks": {
+        "fact_extraction": {
+          "enabled": true,
+          "provider_id": "provider-8226cbf4e2e8",
+          "model": null,
+          "temperature": 0.1,
+          "max_tokens": 4096,
+          "reasoning_effort": null
+        },
+        "mail_intelligence": {
+          "enabled": true,
+          "provider_id": "provider-8226cbf4e2e8",
+          "model": null,
+          "temperature": 0.1,
+          "max_tokens": 4096,
+          "reasoning_effort": null
+        },
+        "profile_insight": {
+          "enabled": true,
+          "provider_id": "provider-8226cbf4e2e8",
+          "model": null,
+          "temperature": 0.1,
+          "max_tokens": 4096,
+          "reasoning_effort": null
+        },
+        "job_fit": {
+          "enabled": true,
+          "provider_id": "provider-8226cbf4e2e8",
+          "model": null,
+          "temperature": 0.1,
+          "max_tokens": 4096,
+          "reasoning_effort": null
+        },
+        "resume_direction": {
+          "enabled": true,
+          "provider_id": "provider-8226cbf4e2e8",
+          "model": null,
+          "temperature": 0.1,
+          "max_tokens": 4096,
+          "reasoning_effort": null
+        },
+        "resume_drafting": {
+          "enabled": true,
+          "provider_id": "provider-8226cbf4e2e8",
+          "model": null,
+          "temperature": 0.1,
+          "max_tokens": 8192,
+          "reasoning_effort": null
+        },
+        "material_review": {
+          "enabled": true,
+          "provider_id": "provider-8226cbf4e2e8",
+          "model": null,
+          "temperature": 0.1,
+          "max_tokens": 6144,
+          "reasoning_effort": null
+        }
+      }
+    },
+    "connectors": {
+      "opencli": {
+        "executable": "C:\\Users\\wq_li\\AppData\\Roaming\\npm\\opencli.cmd",
+        "boss": {
+          "enabled": false,
+          "profile_alias": "default",
+          "search_query": "",
+          "city": "全国",
+          "result_limit": 15
+        },
+        "nowcoder": {
+          "enabled": true,
+          "search_query": "",
+          "city": "全国",
+          "result_limit": 500,
+          "schedule_enabled": true,
+          "schedule_times": [
+            "09:00"
+          ],
+          "timezone": "Asia/Shanghai"
+        }
+      },
+      "imap": {
+        "enabled": true,
+        "email_address": "3586744474@qq.com",
+        "host": "imap.qq.com",
+        "port": 993,
+        "username": "3586744474@qq.com",
+        "folder": "INBOX",
+        "initial_lookback_days": 30,
+        "poll_interval_minutes": 10,
+        "secret_ref": "career-console:292f850a-fbbc-4927-825a-d4255427c671:connector:imap:password"
+      }
+    },
+    "channels": {
+      "qq": {
+        "enabled": false,
+        "app_id": "",
+        "allow_from": [],
+        "notification_targets": [],
+        "event_subscriptions": [
+          "task_reminder",
+          "system_alert"
+        ],
+        "message_format": "plain",
+        "outbound_only": true,
+        "quiet_hours": {
+          "enabled": false,
+          "start": "22:00",
+          "end": "08:00",
+          "timezone": "Asia/Shanghai"
+        },
+        "secret_ref": null
+      },
+      "send_max_retries": 3
+    },
+    "scheduler": {
+      "enabled": true,
+      "poll_seconds": 60,
+      "reminders_enabled": true,
+      "connector_jobs_enabled": false,
+      "profile_maintenance_enabled": false,
+      "profile_maintenance_time": "21:30",
+      "channel_dispatch_enabled": false
+    }
+  }
+}

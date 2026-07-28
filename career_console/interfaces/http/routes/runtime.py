@@ -24,6 +24,8 @@ class ReviewTaskResponse(BaseModel):
     version: int
     agent_run_id: str | None
     target_url: str
+    entity_subtype: str | None = None
+    can_resolve_inline: bool = False
     created_at: datetime
     updated_at: datetime
     resolved_at: datetime | None

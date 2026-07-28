@@ -197,6 +197,6 @@ def test_automatic_upgrade_backs_up_part0_database(tmp_path: Path) -> None:
     assert database_revision(settings.database_path) == "20260723_0001"
     with TestClient(create_app(settings)) as client:
         assert client.get("/health/ready").status_code == 200
-    backups = list(settings.backups_dir.glob("career-*-pre-202607260026.sqlite3"))
+    backups = list(settings.backups_dir.glob("career-*-pre-202607280028.sqlite3"))
     assert len(backups) == 1
     assert database_revision(backups[0]) == "20260723_0001"

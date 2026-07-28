@@ -1,0 +1,5 @@
+INFO:     Started server process [14252]
+INFO:     Waiting for application startup.
+INFO  [alembic.runtime.migration] Context impl SQLiteImpl.
+INFO  [alembic.runtime.migration] Will assume non-transactional DDL.
+INFO  [alembic.runtime.migration] Running upgrade 20260728_0027 -> 20260728_0028, Resolve stale create-application reviews after an application is linked.

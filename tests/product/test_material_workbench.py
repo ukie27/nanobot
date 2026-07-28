@@ -97,6 +97,37 @@ def test_profile_change_recomputes_job_fit_and_invalidates_material_strategy(
         assert saved.json()["strategy_stale"] is False
 
 
+def test_resume_with_one_fact_cannot_be_finalized(tmp_path: Path) -> None:
+    settings = CareerSettings(
+        data_dir=tmp_path / "career",
+        mail_intelligence_mode="disabled",
+        profile_insight_mode="disabled",
+        material_agent_mode="disabled",
+    )
+    with TestClient(create_app(settings)) as client:
+        _fact(client, "skill", "technical_skills", "Python、SQL、FastAPI")
+        job = _job(client)
+
+        generated = client.post(
+            "/api/v1/materials",
+            json={"job_post_id": job["id"], "material_type": "resume", "name": "不完整简历"},
+        )
+
+        assert generated.status_code == 201, generated.text
+        material = generated.json()
+        assert any(
+            finding["code"] == "resume_incomplete"
+            for finding in material["review"]["findings"]
+        )
+
+        finalized = client.post(
+            f"/api/v1/materials/{material['id']}/finalize",
+            json={"expected_version": material["version"]},
+        )
+        assert finalized.status_code == 422
+        assert finalized.json()["code"] == "material_review_blocked"
+
+
 def test_drafter_reviewer_version_chain_and_verified_pdf(tmp_path: Path) -> None:
     settings = CareerSettings(data_dir=tmp_path / "career")
     with TestClient(create_app(settings)) as client:
@@ -263,6 +294,7 @@ def test_base_direction_job_tailored_lineage_and_diff(tmp_path: Path) -> None:
     )
     with TestClient(create_app(settings)) as client:
         _fact(client, "skill", "technical_skills", "Python、SQL、FastAPI")
+        _fact(client, "project", "achievement", "负责后端服务开发并完成稳定交付")
         job = _job(client)
         first = client.post("/api/v1/materials", json={
             "job_post_id": job["id"], "material_type": "resume", "name": "临时材料系列",

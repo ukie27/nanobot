@@ -100,17 +100,25 @@ class IntegrationConfigurationService:
         self.mail_service.secrets.delete(self.imap_secret_ref)
         return {"deleted": document.configuration.connectors.imap.secret_ref is not None}
 
-    def reconcile(self) -> None:
+    def reconcile(self) -> dict[str, str]:
         document = self.configuration.store.load()
         if document is None:
-            return
+            return {}
+        failures: dict[str, str] = {}
         config = document.configuration.connectors
         if config.opencli.executable:
             self.connector_service.runner.executable = config.opencli.executable
         self._project_boss(config.opencli.boss)
         self._project_nowcoder(config.opencli.nowcoder)
         if config.imap.secret_ref:
-            self._project_imap(config.imap)
+            try:
+                self._project_imap(config.imap)
+            except LookupError:
+                self.mail_service.gateway.record_health(
+                    status="unavailable", error_code="imap_credential_missing"
+                )
+                failures["imap"] = "imap_credential_missing"
+        return failures
 
     def import_operational_configuration(self) -> bool:
         """One-time bridge for installations configured before CC-4."""
@@ -136,7 +144,10 @@ class IntegrationConfigurationService:
             try:
                 password = self.mail_service.secrets.get(self.imap_secret_ref)
             except LookupError:
-                password = self.mail_service.secrets.get("imap-account:primary")
+                try:
+                    password = self.mail_service.secrets.get("imap-account:primary")
+                except LookupError:
+                    return False
                 self.mail_service.secrets.set(self.imap_secret_ref, password)
             updated.connectors.imap = ImapConfiguration(
                 enabled=mail["enabled"], secret_ref=self.imap_secret_ref,

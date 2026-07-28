@@ -86,3 +86,38 @@ def test_frontend_connector_writes_are_workspace_scoped_and_separated(
         assert NOWCODER_CONNECTOR_ID in identities
         assert IMAP_CONNECTOR_ID in identities
         assert NOWCODER_CONNECTOR_ID != IMAP_CONNECTOR_ID
+
+
+def test_missing_imap_credential_does_not_prevent_application_startup(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    settings = CareerSettings(data_dir=tmp_path / "workspace")
+    secrets = MemorySecrets()
+    monkeypatch.setattr(
+        "career_console.interfaces.http.app.KeyringSecretStore",
+        lambda: secrets,
+    )
+    with TestClient(create_app(settings)) as client:
+        configured = client.put("/api/v1/mail/account", json={
+            "enabled": True, "email_address": "candidate@example.com",
+            "host": "imap.example.com", "port": 993,
+            "username": "candidate@example.com", "password": "mail-secret-value",
+            "folder": "INBOX", "initial_lookback_days": 30,
+            "poll_interval_minutes": 10,
+        })
+        assert configured.status_code == 200
+        reference = (
+            client.get("/api/v1/configuration").json()["configuration"]
+            ["connectors"]["imap"]["secret_ref"]
+        )
+        secrets.delete(reference)
+
+    with TestClient(create_app(settings)) as restarted:
+        account = restarted.get("/api/v1/mail/account").json()
+        assert account["configured"] is True
+        assert account["health_status"] == "unavailable"
+        assert account["last_error_code"] == "imap_credential_missing"
+        assert account["account"]["credential_configured"] is False
+        assert restarted.app.state.integration_startup_failures == {
+            "imap": "imap_credential_missing"
+        }

@@ -12,6 +12,8 @@ from sqlalchemy.orm import Session, sessionmaker
 from career_console.infrastructure.database.models import (
     AgentRunModel,
     ApplicationEventProposalModel,
+    MailIntelligenceAnalysisModel,
+    MailIntelligenceItemModel,
     ReviewTaskModel,
 )
 
@@ -67,6 +69,13 @@ class SqlAlchemyRuntimeGateway:
 
     @classmethod
     def _review_view(cls, session: Session, row: ReviewTaskModel) -> dict[str, Any]:
+        entity_subtype = None
+        can_resolve_inline = False
+        if row.entity_type == "mail_intelligence_item":
+            item = session.get(MailIntelligenceItemModel, row.entity_id)
+            if item is not None:
+                entity_subtype = item.item_type
+                can_resolve_inline = item.item_type != "create_application"
         return {
             "id": row.id,
             "task_type": row.task_type,
@@ -80,6 +89,8 @@ class SqlAlchemyRuntimeGateway:
             "version": row.version,
             "agent_run_id": row.agent_run_id,
             "target_url": cls._review_target(session, row),
+            "entity_subtype": entity_subtype,
+            "can_resolve_inline": can_resolve_inline,
             "created_at": cls._utc(row.created_at),
             "updated_at": cls._utc(row.updated_at or row.created_at),
             "resolved_at": cls._utc(row.resolved_at),
@@ -98,6 +109,15 @@ class SqlAlchemyRuntimeGateway:
                     f"?review={proposal.id}"
                 )
             return "/applications"
+        if row.entity_type == "mail_intelligence_item":
+            item = session.get(MailIntelligenceItemModel, row.entity_id)
+            analysis = (
+                session.get(MailIntelligenceAnalysisModel, item.analysis_id)
+                if item is not None
+                else None
+            )
+            if analysis is not None:
+                return f"/message-center?messageId={analysis.mail_message_id}"
         return _REVIEW_TARGETS.get(row.entity_type, "/workspace")
 
     @classmethod

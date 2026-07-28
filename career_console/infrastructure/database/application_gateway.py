@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -23,8 +23,10 @@ from career_console.infrastructure.database.models import (
     ApplicationMaterialSnapshotModel,
     ApplicationModel,
     CompanyModel,
+    JobMatchAnalysisModel,
     JobPostModel,
     JobPostVersionModel,
+    JobRequirementModel,
     MailIntelligenceAnalysisModel,
     MailIntelligenceItemModel,
     MailMessageModel,
@@ -66,6 +68,24 @@ class SqlAlchemyApplicationGateway:
                 .where(JobPostVersionModel.job_post_id == post.id)
                 .order_by(JobPostVersionModel.version_number.desc())
             )
+            requirement_count = session.scalar(
+                select(func.count())
+                .select_from(JobRequirementModel)
+                .where(JobRequirementModel.job_post_version_id == job_version.id)
+            )
+            analysis = session.scalar(
+                select(JobMatchAnalysisModel.id)
+                .where(
+                    JobMatchAnalysisModel.job_post_id == post.id,
+                    JobMatchAnalysisModel.job_post_version_id == job_version.id,
+                )
+                .order_by(JobMatchAnalysisModel.created_at.desc())
+            )
+            if not requirement_count or analysis is None:
+                raise CareerDomainError(
+                    "岗位尚未提取出有效要求，请先重新分析岗位。",
+                    code="job_analysis_required",
+                )
             company = session.get(CompanyModel, post.company_id)
             has_final = session.scalar(
                 select(MaterialDraftModel.id).where(
@@ -590,13 +610,40 @@ class SqlAlchemyApplicationGateway:
 
     @staticmethod
     def _link_mail_to_application(session: Session, application: ApplicationModel) -> None:
+        now = datetime.now(UTC)
         analyses = session.scalars(select(MailIntelligenceAnalysisModel).where(
             MailIntelligenceAnalysisModel.job_post_id == application.job_post_id,
             MailIntelligenceAnalysisModel.application_id.is_(None),
         )).all()
         for analysis in analyses:
             analysis.application_id = application.id
-            analysis.updated_at = datetime.now(UTC)
+            analysis.create_record_recommended = 0
+            analysis.updated_at = now
+            create_items = session.scalars(
+                select(MailIntelligenceItemModel).where(
+                    MailIntelligenceItemModel.analysis_id == analysis.id,
+                    MailIntelligenceItemModel.item_type == "create_application",
+                    MailIntelligenceItemModel.status == "pending",
+                )
+            ).all()
+            for item in create_items:
+                item.status = "confirmed"
+                item.version += 1
+                item.resolution_reason = "已从该邮件建立正式申请档案。"
+                item.resolved_at = now
+                task = session.scalar(
+                    select(ReviewTaskModel).where(
+                        ReviewTaskModel.entity_type == "mail_intelligence_item",
+                        ReviewTaskModel.entity_id == item.id,
+                    )
+                )
+                if task is not None:
+                    set_review_resolution(
+                        task,
+                        now=now,
+                        resolution="confirmed",
+                        reason=item.resolution_reason,
+                    )
 
     def _view(self, session: Session, application: ApplicationModel) -> dict[str, Any]:
         result = self._summary(session, application)

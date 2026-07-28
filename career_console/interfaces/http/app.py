@@ -237,7 +237,7 @@ def create_app(settings: CareerSettings | None = None) -> FastAPI:
             imap_secret_ref=imap_secret_reference,
         )
         integration_configuration.import_operational_configuration()
-        integration_configuration.reconcile()
+        app.state.integration_startup_failures = integration_configuration.reconcile()
         interview_gateway = SqlAlchemyInterviewGateway(database.session_factory)
         governance_gateway = SqlAlchemyGovernanceGateway(
             database.session_factory, settings=settings, secrets=secret_store

@@ -409,9 +409,18 @@ class SqlAlchemyJobGateway:
 
     def _job_summary(self, session: Session, post: JobPostModel) -> dict[str, Any]:
         company = session.get(CompanyModel, post.company_id)
+        latest_version = self._latest_version(session, post.id)
+        requirement_count = session.scalar(
+            select(func.count())
+            .select_from(JobRequirementModel)
+            .where(JobRequirementModel.job_post_version_id == latest_version.id)
+        )
         analysis = session.scalar(
             select(JobMatchAnalysisModel)
-            .where(JobMatchAnalysisModel.job_post_id == post.id)
+            .where(
+                JobMatchAnalysisModel.job_post_id == post.id,
+                JobMatchAnalysisModel.job_post_version_id == latest_version.id,
+            )
             .order_by(JobMatchAnalysisModel.created_at.desc())
         )
         return {
@@ -424,6 +433,7 @@ class SqlAlchemyJobGateway:
             "deadline_at": self._as_utc(post.deadline_at),
             "status": post.status,
             "version": post.version,
+            "requirement_count": requirement_count or 0,
             "latest_analysis": self._analysis_summary(analysis),
             "created_at": self._as_utc(post.created_at),
             "updated_at": self._as_utc(post.updated_at),

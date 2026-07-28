@@ -405,10 +405,14 @@ def test_profile_concurrency_lock(tmp_path: Path) -> None:
 def test_opencli_exit_code_mapping(
     monkeypatch: pytest.MonkeyPatch, exit_code: int, expected: str
 ) -> None:
-    def fake_run(*args, **kwargs):
-        return subprocess.CompletedProcess(args[0], exit_code, "", "")
+    class FakeProcess:
+        returncode = exit_code
+        pid = 123
 
-    monkeypatch.setattr(subprocess, "run", fake_run)
+        def communicate(self, *, timeout: int | None = None):
+            return "", ""
+
+    monkeypatch.setattr(subprocess, "Popen", lambda *args, **kwargs: FakeProcess())
     runner = OpenCliProcessRunner("opencli.exe")
     with pytest.raises(OpenCliError) as caught:
         runner.boss_status(profile="career")
@@ -418,11 +422,19 @@ def test_opencli_exit_code_mapping(
 def test_opencli_argv_and_write_command_allowlist(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict = {}
 
-    def fake_run(argv, **kwargs):
-        captured.update({"argv": argv, **kwargs})
-        return subprocess.CompletedProcess(argv, 0, '[{"logged_in":true}]', "")
+    class FakeProcess:
+        returncode = 0
+        pid = 123
 
-    monkeypatch.setattr(subprocess, "run", fake_run)
+        def communicate(self, *, timeout: int | None = None):
+            captured["timeout"] = timeout
+            return '[{"logged_in":true}]', ""
+
+    def fake_popen(argv, **kwargs):
+        captured.update({"argv": argv, **kwargs})
+        return FakeProcess()
+
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
     runner = OpenCliProcessRunner("opencli.exe")
     runner.boss_status(profile="career")
     assert captured["argv"] == [
@@ -435,26 +447,62 @@ def test_opencli_argv_and_write_command_allowlist(monkeypatch: pytest.MonkeyPatc
         "json",
     ]
     assert captured["shell"] is False
+    assert captured["timeout"] == 15
     with pytest.raises(OpenCliError) as caught:
         runner._run("career", "send", [])
     assert caught.value.code == ConnectorError.COMMAND_DENIED
 
 
-def test_windows_cmd_shim_prefers_powershell_to_avoid_cmd_metacharacters(
+def test_opencli_timeout_terminates_entire_process_tree(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple] = []
+
+    class TimedOutProcess:
+        returncode = None
+        pid = 456
+
+        def communicate(self, *, timeout: int | None = None):
+            calls.append(("communicate", timeout))
+            if len(calls) == 1:
+                raise subprocess.TimeoutExpired("opencli", timeout)
+            return "", ""
+
+        def kill(self) -> None:
+            calls.append(("kill",))
+
+    monkeypatch.setattr(subprocess, "Popen", lambda *args, **kwargs: TimedOutProcess())
+    monkeypatch.setattr(
+        OpenCliProcessRunner,
+        "_terminate_process_tree",
+        staticmethod(lambda process: calls.append(("terminate_tree", process.pid))),
+    )
+
+    with pytest.raises(OpenCliError) as caught:
+        OpenCliProcessRunner("opencli.exe").boss_status(profile="career")
+
+    assert caught.value.code == ConnectorError.TIMEOUT
+    assert calls == [("communicate", 15), ("terminate_tree", 456)]
+
+
+def test_windows_cmd_shim_does_not_probe_sibling_files(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     command_path = tmp_path / "opencli.cmd"
-    powershell_path = tmp_path / "opencli.ps1"
     command_path.write_text("", encoding="ascii")
-    powershell_path.write_text("", encoding="ascii")
 
     def fake_which(name: str) -> str | None:
-        return "C:/Program Files/PowerShell/7/pwsh.exe" if name == "pwsh.exe" else None
+        return "C:/Windows/System32/cmd.exe" if name == "cmd.exe" else None
 
     monkeypatch.setattr("career_console.infrastructure.connectors.opencli.shutil.which", fake_which)
     prefix = OpenCliProcessRunner(command_path)._command_prefix()
-    assert prefix[-2:] == ["-File", str(powershell_path)]
-    assert "/c" not in prefix
+    assert prefix == [
+        "C:/Windows/System32/cmd.exe",
+        "/d",
+        "/s",
+        "/c",
+        str(command_path),
+    ]
 
 
 def test_upgrade_from_part5_creates_backup_and_connector_schema(tmp_path: Path) -> None:
@@ -463,8 +511,8 @@ def test_upgrade_from_part5_creates_backup_and_connector_schema(tmp_path: Path) 
     command.upgrade(alembic_config(settings), "20260724_0006")
     with TestClient(create_app(settings)) as client:
         assert client.get("/api/v1/connectors/boss").status_code == 200
-    assert database_revision(settings.database_path) == "20260726_0026"
-    assert list(settings.backups_dir.glob("*pre-202607260026.sqlite3"))
+    assert database_revision(settings.database_path) == "20260728_0028"
+    assert list(settings.backups_dir.glob("*pre-202607280028.sqlite3"))
     with sqlite3.connect(settings.database_path) as connection:
         tables = {
             row[0]

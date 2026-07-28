@@ -32,7 +32,19 @@ class MailApplicationService:
         self.secret_reference = secret_reference
 
     def get(self) -> dict[str, Any]:
-        return self.gateway.get()
+        state = self.gateway.get()
+        account = state.get("account")
+        if account is not None:
+            try:
+                self.secrets.get(self._secret_reference("primary"))
+                credential_configured = True
+            except LookupError:
+                credential_configured = False
+            state = {
+                **state,
+                "account": {**account, "credential_configured": credential_configured},
+            }
+        return state
 
     def configure(self, *, password: str | None = None, **values: Any) -> dict[str, Any]:
         values["folder"] = values["folder"].strip().upper()
@@ -60,20 +72,27 @@ class MailApplicationService:
         config = self._connection_config()
         try:
             result = self.client.test_connection(**config)
+            self.gateway.record_health(status="healthy", error_code=None)
             return {**result, "read_only": True}
-        except ImapReadOnlyError:
+        except ImapReadOnlyError as exc:
+            self.gateway.record_health(status="unavailable", error_code=exc.code)
             raise
 
     def list_messages(self, *, limit: int = 100) -> list[dict[str, Any]]:
         return self.gateway.list_messages(limit=limit)
 
     def analyze_message(self, *, message_id: str) -> dict[str, Any]:
+        message = self.gateway.get_message(message_id)
+        if not self._is_analysis_candidate(message):
+            raise CareerDomainError(
+                "无关邮件仅保留最少 Header，不会进入智能分析。",
+                code="mail_intelligence_unrelated",
+            )
         if self.analyzer is None:
             raise CareerDomainError(
                 "邮件智能分析 Agent 尚未配置，请在 CareerConsole 设置中配置模型 Provider 后重启。",
                 code="mail_intelligence_unavailable",
             )
-        message = self.gateway.get_message(message_id)
         if message.get("intelligence") is not None:
             return message["intelligence"]
         if not message["body_fetched"]:
@@ -240,6 +259,7 @@ class MailApplicationService:
     def _queue_analysis(self, message: dict[str, Any]) -> bool:
         if (
             self.jobs is None or self.analyzer is None or not message.get("body_fetched")
+            or not self._is_analysis_candidate(message)
             or message.get("intelligence") is not None
         ):
             return False
@@ -248,6 +268,10 @@ class MailApplicationService:
             idempotency_key=f"mail-intelligence:{message['id']}", priority=40, max_attempts=3,
         )
         return True
+
+    @staticmethod
+    def _is_analysis_candidate(message: dict[str, Any]) -> bool:
+        return message.get("classification") in {"recruiting", "possibly_related"}
 
     def _create_candidate(self, message: dict[str, Any]) -> None:
         application, score, reason = self._match(message)

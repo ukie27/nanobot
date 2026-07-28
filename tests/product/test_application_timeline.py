@@ -14,20 +14,24 @@ from career_console.interfaces.http import create_app
 
 
 def _confirmed_fact(client: TestClient) -> None:
-    created = client.post(
-        "/api/v1/facts",
-        json={
-            "category": "skill",
-            "field_key": "technical_skills",
-            "value": "熟练使用 Python 和 SQL",
-            "source_note": "application test",
-        },
-    ).json()
-    response = client.post(
-        f"/api/v1/facts/{created['id']}/confirm",
-        json={"expected_version": created["version"], "reason": "verified"},
-    )
-    assert response.status_code == 200
+    for category, field_key, value in [
+        ("skill", "technical_skills", "熟练使用 Python 和 SQL"),
+        ("project", "achievement", "负责后端服务开发并完成稳定交付"),
+    ]:
+        created = client.post(
+            "/api/v1/facts",
+            json={
+                "category": category,
+                "field_key": field_key,
+                "value": value,
+                "source_note": "application test",
+            },
+        ).json()
+        response = client.post(
+            f"/api/v1/facts/{created['id']}/confirm",
+            json={"expected_version": created["version"], "reason": "verified"},
+        )
+        assert response.status_code == 200
 
 
 def _job(client: TestClient) -> dict:
@@ -305,9 +309,9 @@ def test_upgrade_from_part3_creates_backup_and_application_schema(tmp_path: Path
     with TestClient(create_app(settings)) as client:
         doctor = client.get("/api/v1/system/status")
         assert doctor.status_code == 200
-        assert doctor.json()["database_revision"] == "20260726_0026"
+        assert doctor.json()["database_revision"] == "20260728_0028"
 
-    assert list(settings.backups_dir.glob("*pre-202607260026.sqlite3"))
+    assert list(settings.backups_dir.glob("*pre-202607280028.sqlite3"))
     with sqlite3.connect(settings.database_path) as connection:
         tables = {
             row[0]

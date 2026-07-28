@@ -156,10 +156,10 @@ def test_background_job_claim_backoff_retry_and_cancel(tmp_path: Path) -> None:
     settings = CareerSettings(data_dir=tmp_path / "career")
     upgrade_to_head(settings)
     database = Database(settings)
-    now = datetime.now(UTC)
     try:
         service = BackgroundJobService(database.session_factory)
         job_id = service.enqueue("test.reliable", max_attempts=2)
+        now = datetime.now(UTC)
         claimed = service.claim_next("worker-1", lease_seconds=30, now=now)
         assert claimed is not None and claimed.id == job_id and claimed.attempt_count == 1
         service.fail(job_id, "worker-1", error_code="temporary", now=now)
@@ -182,8 +182,8 @@ def test_upgrade_from_part4_creates_backup_and_scheduler_schema(tmp_path: Path) 
     assert database_revision(settings.database_path) == "20260724_0005"
     with TestClient(create_app(settings)) as client:
         assert client.get("/health/ready").status_code == 200
-    assert database_revision(settings.database_path) == "20260726_0026"
-    assert list(settings.backups_dir.glob("*pre-202607260026.sqlite3"))
+    assert database_revision(settings.database_path) == "20260728_0028"
+    assert list(settings.backups_dir.glob("*pre-202607280028.sqlite3"))
     with sqlite3.connect(settings.database_path) as connection:
         tables = {
             row[0]

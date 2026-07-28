@@ -58,13 +58,19 @@ class _Drafter:
     last_retry_count = 0
 
     def draft(self, *, context: dict) -> ResumeDraftResult:
-        fact = context["confirmedFacts"][0]
+        first_fact = context["confirmedFacts"][0]
+        second_fact = context["confirmedFacts"][1]
         requirement = context["requirements"][0]
         return ResumeDraftResult.model_validate({
             "schemaVersion": "resume_draft.v2", "title": "Python 后端定制简历",
-            "blocks": [{"blockId": "skill-python", "section": "专业技能",
-                        "text": fact["value"], "factIds": [fact["id"]],
-                        "requirementIds": [requirement["id"]]}],
+            "blocks": [
+                {"blockId": "skill-python", "section": "专业技能",
+                 "text": first_fact["value"], "factIds": [first_fact["id"]],
+                 "requirementIds": [requirement["id"]]},
+                {"blockId": "project-delivery", "section": "项目经历",
+                 "text": second_fact["value"], "factIds": [second_fact["id"]],
+                 "requirementIds": [requirement["id"]]},
+            ],
             "rationale": "按已确认方向突出 Python 证据。",
         })
 
@@ -119,9 +125,9 @@ def _settings(path: Path) -> CareerSettings:
                           resume_direction_mode="disabled", material_agent_mode="disabled")
 
 
-def _fact(client: TestClient, *, key: str = "technical_skills",
+def _fact(client: TestClient, *, category: str = "skill", key: str = "technical_skills",
           value: str = "Python、SQL、FastAPI") -> dict:
-    proposed = client.post("/api/v1/facts", json={"category": "skill",
+    proposed = client.post("/api/v1/facts", json={"category": category,
                            "field_key": key, "value": value,
                            "source_note": "test"}).json()
     return client.post(f"/api/v1/facts/{proposed['id']}/confirm", json={
@@ -135,6 +141,18 @@ def _job(client: TestClient) -> dict:
     return response.json()
 
 
+def _complete_profile(client: TestClient) -> tuple[dict, dict]:
+    return (
+        _fact(client),
+        _fact(
+            client,
+            category="project",
+            key="achievement",
+            value="负责后端服务开发并完成稳定交付",
+        ),
+    )
+
+
 def _select_direction(client: TestClient, job_id: str) -> None:
     client.app.state.resume_direction_service.analyzer = _DirectionAnalyzer()
     proposal = client.post(f"/api/v1/job-posts/{job_id}/resume-directions").json()
@@ -146,7 +164,7 @@ def _select_direction(client: TestClient, job_id: str) -> None:
 
 def test_material_agent_requires_active_direction(tmp_path: Path) -> None:
     with TestClient(create_app(_settings(tmp_path))) as client:
-        _fact(client, key="delivery_skills", value="持续集成与可靠交付")
+        _complete_profile(client)
         job = _job(client)
         client.app.state.material_agent_service.drafter = _Drafter()
         client.app.state.material_agent_service.reviewer = _Reviewer()
@@ -157,7 +175,7 @@ def test_material_agent_requires_active_direction(tmp_path: Path) -> None:
 
 def test_material_agent_confirmation_promotes_fact_bound_version(tmp_path: Path) -> None:
     with TestClient(create_app(_settings(tmp_path))) as client:
-        fact = _fact(client)
+        fact, _ = _complete_profile(client)
         job = _job(client)
         _select_direction(client, job["id"])
         service = client.app.state.material_agent_service
@@ -175,16 +193,21 @@ def test_material_agent_confirmation_promotes_fact_bound_version(tmp_path: Path)
         assert resolved.json()["material_draft_id"]
         material = client.get(f"/api/v1/materials/{resolved.json()['material_draft_id']}").json()
         assert material["status"] == "reviewed"
-        assert material["current_version"]["blocks"][0]["fact_snapshots"][0]["fact_id"] == fact["id"]
+        referenced_fact_ids = {
+            snapshot["fact_id"]
+            for block in material["current_version"]["blocks"]
+            for snapshot in block["fact_snapshots"]
+        }
+        assert fact["id"] in referenced_fact_ids
         with client.app.state.database.session_factory() as session:
             version = session.scalar(select(ResumeVersionModel))
             assert version.version_number == 1 and version.parent_version_id is None
-            assert session.scalar(select(func.count()).select_from(FactReferenceModel)) == 1
+            assert session.scalar(select(func.count()).select_from(FactReferenceModel)) == 2
 
 
 def test_material_agent_rejects_stale_direction_selection(tmp_path: Path) -> None:
     with TestClient(create_app(_settings(tmp_path))) as client:
-        _fact(client)
+        _complete_profile(client)
         job = _job(client)
         _select_direction(client, job["id"])
         _fact(client, key="delivery_skills", value="持续集成与可靠交付")
@@ -196,7 +219,7 @@ def test_material_agent_rejects_stale_direction_selection(tmp_path: Path) -> Non
 
 def test_invalid_draft_and_reviewer_failure_leave_audit_only(tmp_path: Path) -> None:
     with TestClient(create_app(_settings(tmp_path))) as client:
-        _fact(client)
+        _complete_profile(client)
         job = _job(client)
         _select_direction(client, job["id"])
         service = client.app.state.material_agent_service

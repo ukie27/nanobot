@@ -3,7 +3,9 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 
 import {
+  getNowcoderConnector,
   getOpportunities,
+  scanNowcoderConnector,
   triageOpportunity,
   type OpportunityTriageStatus,
   type RecruitmentOpportunity,
@@ -23,6 +25,19 @@ export function OpportunityPage() {
     queryKey: ["opportunities", filter ?? "all"],
     queryFn: () => getOpportunities(filter),
   });
+  const connector = useQuery({
+    queryKey: ["nowcoder-connector"],
+    queryFn: getNowcoderConnector,
+  });
+  const sync = useMutation({
+    mutationFn: () => scanNowcoderConnector(0),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["opportunities"] }),
+        queryClient.invalidateQueries({ queryKey: ["nowcoder-connector"] }),
+      ]);
+    },
+  });
   const triage = useMutation({
     mutationFn: ({ item, status }: { item: RecruitmentOpportunity; status: OpportunityTriageStatus }) =>
       triageOpportunity(item, status),
@@ -37,6 +52,11 @@ export function OpportunityPage() {
     ["following", "已关注"],
     ["ignored", "已忽略"],
   ];
+  const hasItems = Boolean(query.data?.total);
+  const hasFilter = filter !== undefined;
+  const sourceEnabled = Boolean(connector.data?.enabled);
+  const sourceHealthy = connector.data?.health_status === "healthy";
+  const hasSuccessfulSync = Boolean(connector.data?.last_success_at);
 
   return <>
     <header className="page-header">
@@ -47,19 +67,48 @@ export function OpportunityPage() {
       <strong>这里收录招聘项目线索，不代表具体岗位 JD</strong>
       <p>牛客每日同步进入机会池。关注后请从官方入口查看具体职位，再将真实 JD 导入<Link to="/job-posts">目标岗位</Link>进行匹配和材料生成。</p>
     </section>
-    <div className="opportunity-filters" aria-label="机会状态筛选">
+    {(hasItems || hasFilter) && <div className="opportunity-filters" aria-label="机会状态筛选">
       {filters.map(([value, label]) => <button
         type="button"
         className={filter === value ? "" : "secondary"}
         key={label}
         onClick={() => setFilter(value)}
       >{label}</button>)}
-    </div>
+    </div>}
     {query.error && <section className="notice error">{query.error.message}</section>}
+    {connector.error && <section className="notice error">{connector.error.message}</section>}
+    {sync.error && <section className="notice error">{sync.error.message}</section>}
     {triage.error && <section className="notice error">{triage.error.message}</section>}
     {!query.isLoading && !query.data?.total && <section className="empty-state">
-      <div className="empty-icon">＋</div><h2>当前筛选下没有招聘机会</h2>
-      <p>在数据来源中启用牛客校招日程。自动任务只同步北京时间当天的新信息，历史一个月需由你手动触发。</p>
+      <div className="empty-icon">{hasFilter ? "筛" : "今"}</div>
+      {hasFilter ? <>
+        <h2>当前筛选下没有招聘机会</h2>
+        <p>其他状态中可能仍有记录。清除筛选可查看全部机会。</p>
+        <button type="button" onClick={() => setFilter(undefined)}>清除筛选</button>
+      </> : !sourceEnabled ? <>
+        <h2>尚未启用牛客招聘来源</h2>
+        <p>完成牛客与 OpenCLI 配置后，系统才能获取北京时间当天新增的校招信息。</p>
+        <Link className="download-button" to="/settings?section=sources">配置数据来源</Link>
+      </> : !sourceHealthy ? <>
+        <h2>牛客招聘来源当前不可用</h2>
+        <p>请检查 OpenCLI、网站插件和登录状态，测试通过后再同步今天的信息。</p>
+        <Link className="download-button" to="/settings?section=sources">修复数据来源</Link>
+      </> : !hasSuccessfulSync ? <>
+        <h2>今天还没有同步招聘信息</h2>
+        <p>立即获取只会读取北京时间当天的新信息，不会主动回扫历史。</p>
+        <button type="button" disabled={sync.isPending} onClick={() => sync.mutate()}>
+          {sync.isPending ? "正在同步…" : "立即获取今天"}
+        </button>
+      </> : <>
+        <h2>今天暂时没有新机会</h2>
+        <p>牛客来源最近一次同步成功。系统会按自动任务设置继续检查当天新增信息。</p>
+        <div className="form-actions empty-actions">
+          <button type="button" className="secondary" disabled={sync.isPending} onClick={() => sync.mutate()}>
+            {sync.isPending ? "正在同步…" : "再次检查今天"}
+          </button>
+          <Link className="download-button secondary" to="/settings?section=sources">查看同步设置</Link>
+        </div>
+      </>}
     </section>}
     <section className="opportunity-list">
       {query.data?.items.map((item) => <article className="panel opportunity-card" key={item.id}>
@@ -73,7 +122,8 @@ export function OpportunityPage() {
           <h2>{item.company} · {item.batch}</h2>
           <p>{item.cities || "城市待确认"} · {item.careers || "岗位方向待确认"}</p>
           {item.evaluation && <p className="opportunity-evaluation">{item.evaluation}</p>}
-          <small>牛客收录：{formatChinaTime(item.last_collected_at)}（北京时间） · v{item.version}</small>
+          <small>牛客收录：{formatChinaTime(item.last_collected_at)}（北京时间）</small>
+          <details className="audit-details"><summary>查看记录信息</summary><small>记录版本：{item.version}</small></details>
           {item.application_ends_at && <small>网申截止：{formatChinaTime(item.application_ends_at)}（北京时间）</small>}
         </div>
         <div className="opportunity-actions">

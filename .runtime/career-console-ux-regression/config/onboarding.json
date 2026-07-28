@@ -1,0 +1,18 @@
+{
+  "schemaVersion": "career-console.onboarding.v1",
+  "onboardingVersion": 1,
+  "completedAt": "2026-07-28T06:41:22.362151Z",
+  "skippedSteps": [
+    "channel",
+    "profile"
+  ],
+  "stepStates": {
+    "workspace": "configured",
+    "provider": "configured",
+    "profile": "skipped",
+    "recruitment_sources": "configured",
+    "mail": "configured",
+    "channel": "skipped",
+    "scheduler": "configured"
+  }
+}

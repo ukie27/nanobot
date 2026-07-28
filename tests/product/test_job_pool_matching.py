@@ -148,6 +148,39 @@ def test_unmet_must_requirement_is_an_explicit_gap(tmp_path: Path) -> None:
         assert len(client.get(f"/api/v1/job-posts/{job['id']}").json()["analyses"]) == 1
 
 
+def test_job_without_requirements_blocks_material_and_application_creation(
+    tmp_path: Path,
+) -> None:
+    settings = CareerSettings(data_dir=tmp_path / "career")
+    with TestClient(create_app(settings)) as client:
+        imported = client.post(
+            "/api/v1/job-posts/import-text",
+            json={
+                "name": "只有介绍的岗位",
+                "text": "职位：平台工程师\n公司：示例科技\n岗位介绍\n参与内部平台建设与日常维护。",
+            },
+        )
+        assert imported.status_code == 201, imported.text
+        job = imported.json()
+        assert job["requirements"] == []
+        summary = client.get("/api/v1/job-posts").json()["items"][0]
+        assert summary["requirement_count"] == 0
+
+        material = client.post(
+            "/api/v1/materials",
+            json={"job_post_id": job["id"], "material_type": "resume", "name": "岗位简历"},
+        )
+        assert material.status_code == 422
+        assert material.json()["code"] == "job_analysis_required"
+
+        application = client.post(
+            "/api/v1/applications",
+            json={"job_post_id": job["id"]},
+        )
+        assert application.status_code == 422
+        assert application.json()["code"] == "job_analysis_required"
+
+
 def test_same_job_analysis_input_is_idempotent_under_concurrency(tmp_path: Path) -> None:
     settings = CareerSettings(data_dir=tmp_path / "career")
     app = create_app(settings)

@@ -1,0 +1,20 @@
+{
+  "schemaVersion": "career-console.workspace.v1",
+  "workspaceId": "292f850a-fbbc-4927-825a-d4255427c671",
+  "name": "career-console-ux-regression",
+  "product": "CareerConsole",
+  "createdAt": "2026-07-28T02:13:53.461169Z",
+  "lastOpenedAt": "2026-07-28T02:13:53.461169Z",
+  "portable": false,
+  "paths": {
+    "config": "config",
+    "data": "data",
+    "secrets": "secrets",
+    "blobs": "blobs",
+    "exports": "exports",
+    "backups": "backups",
+    "logs": "logs",
+    "integrations": "integrations",
+    "runtime": "runtime"
+  }
+}

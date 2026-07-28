@@ -79,6 +79,7 @@ class JobPostSummaryResponse(BaseModel):
     deadline_at: datetime | None
     status: str
     version: int
+    requirement_count: int = 0
     latest_analysis: JobAnalysisResponse | None
     created_at: datetime
     updated_at: datetime

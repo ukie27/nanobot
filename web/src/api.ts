@@ -310,7 +310,7 @@ export interface JobAnalysis extends JobAnalysisSummary { evidence: JobEvidence[
 export interface JobPostSummary {
   id: string; company: string; title: string; location: string | null; employment_type: string | null;
   work_mode: string | null; deadline_at: string | null; status: string; version: number;
-  latest_analysis: JobAnalysisSummary | null; created_at: string; updated_at: string;
+  requirement_count: number; latest_analysis: JobAnalysisSummary | null; created_at: string; updated_at: string;
 }
 export interface JobPost extends JobPostSummary {
   duplicate: boolean; created: boolean; target_audience: string | null; raw_text: string; content_hash: string;
@@ -585,6 +585,7 @@ export interface UnifiedReviewTask {
   id: string; task_type: string; entity_type: string; entity_id: string; title: string;
   summary: string; source_type: string; priority: number; status: string; version: number;
   agent_run_id: string | null; target_url: string; created_at: string; updated_at: string;
+  entity_subtype: string | null; can_resolve_inline: boolean;
   resolved_at: string | null; resolution: string | null; resolution_reason: string | null;
   resolved_by: string | null;
 }
@@ -811,7 +812,7 @@ export const proposeMailMessage = (body: { message_id: string; application_id: s
 export const analyzeMailMessage = (messageId: string) =>
   sendJson<MailIntelligence>(`/api/v1/mail/messages/${messageId}/analyze`, {});
 export const resolveMailIntelligenceItem = (
-  item: MailIntelligenceItem, resolution: "confirmed" | "rejected",
+  item: Pick<MailIntelligenceItem, "id" | "version">, resolution: "confirmed" | "rejected",
 ) => sendJson<MailIntelligenceItem>(`/api/v1/mail/intelligence-items/${item.id}/resolve`, {
   expected_version: item.version, resolution,
   reason: resolution === "confirmed" ? "用户核对邮件证据后确认" : "用户判定该分析不准确",

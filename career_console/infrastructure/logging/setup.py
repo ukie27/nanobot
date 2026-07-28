@@ -28,7 +28,13 @@ def configure_logging(
     log_path = logs_dir / "career.log"
     logger.remove()
     if verbose:
-        logger.add(sys.stderr, level=level, enqueue=True)
+        logger.add(
+            sys.stderr,
+            level=level,
+            enqueue=True,
+            backtrace=False,
+            diagnose=False,
+        )
     logger.add(
         log_path,
         level=level,
@@ -36,6 +42,8 @@ def configure_logging(
         retention=f"{retention_days} days",
         enqueue=True,
         serialize=True,
+        backtrace=False,
+        diagnose=False,
         format="{time:YYYY-MM-DDTHH:mm:ss.SSSZ} | {level} | {extra} | {message}",
         filter=lambda record: _redact_record(record),
     )
