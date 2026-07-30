@@ -1,0 +1,58 @@
++--------------------- Traceback (most recent call last) ---------------------+
+| D:\project\job-agent\nanobot-career\career_console\cli.py:116 in serve      |
+|                                                                             |
+|   113         settings = _settings(selected_workspace).model_copy(          |
+|   114             update={"host": host, "port": port}                       |
+|   115         )                                                             |
+| > 116         log_path = configure_logging(                                 |
+|   117             settings.logs_dir, level=settings.log_level,              |
+|       verbose=verbose,                                                      |
+|   118             retention_days=settings.log_retention_days,               |
+|   119         )                                                             |
+|                                                                             |
+| D:\project\job-agent\nanobot-career\career_console\infrastructure\logging\s |
+| etup.py:38 in configure_logging                                             |
+|                                                                             |
+|   35             backtrace=False,                                           |
+|   36             diagnose=False,                                            |
+|   37         )                                                              |
+| > 38     logger.add(                                                        |
+|   39         log_path,                                                      |
+|   40         level=level,                                                   |
+|   41         rotation="10 MB",                                              |
+|                                                                             |
+| D:\project\job-agent\nanobot-career\.venv\Lib\site-packages\loguru\_logger. |
+| py:802 in add                                                               |
+|                                                                             |
+|    799             if colorize is None:                                     |
+|    800                 colorize = False                                     |
+|    801                                                                      |
+| >  802             wrapped_sink = FileSink(path, **kwargs)                  |
+|    803             kwargs = {}                                              |
+|    804             encoding = wrapped_sink.encoding                         |
+|    805             terminator = "\n"                                        |
+|                                                                             |
+| D:\project\job-agent\nanobot-career\.venv\Lib\site-packages\loguru\_file_si |
+| nk.py:192 in __init__                                                       |
+|                                                                             |
+|   189         if not delay:                                                 |
+|   190             path = self._create_path()                                |
+|   191             self._create_dirs(path)                                   |
+| > 192             self._create_file(path)                                   |
+|   193                                                                       |
+|   194     def write(self, message):                                         |
+|   195         if self._file is None:                                        |
+|                                                                             |
+| D:\project\job-agent\nanobot-career\.venv\Lib\site-packages\loguru\_file_si |
+| nk.py:226 in _create_file                                                   |
+|                                                                             |
+|   223         os.makedirs(dirname, exist_ok=True)                           |
+|   224                                                                       |
+|   225     def _create_file(self, path):                                     |
+| > 226         self._file = open(path, **self._kwargs)                       |
+|   227         self._file_path = path                                        |
+|   228                                                                       |
+|   229         if self._watch:                                               |
++-----------------------------------------------------------------------------+
+PermissionError: [Errno 13] Permission denied: 
+'D:\\project\\careerconsole_test\\CareerConsole\\logs\\career.log'

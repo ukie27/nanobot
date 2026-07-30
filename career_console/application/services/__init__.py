@@ -20,9 +20,13 @@ from career_console.application.services.profile_memory import (
     ProfileImpactApplicationService,
     ProfileMemoryApplicationService,
 )
+from career_console.application.services.recommendations import (
+    JobRecommendationApplicationService,
+)
 from career_console.application.services.resume_direction import (
     ResumeDirectionApplicationService,
 )
+from career_console.application.services.review_maintenance import ReviewMaintenanceService
 from career_console.application.services.runtime import RuntimeApplicationService
 from career_console.application.services.tasks import TaskApplicationService
 
@@ -32,10 +36,12 @@ __all__ = [
     "NowcoderConnectorApplicationService",
     "OpportunityApplicationService",
     "RuntimeApplicationService",
+    "ReviewMaintenanceService",
     "ResumeDirectionApplicationService",
     "GovernanceApplicationService",
     "JobApplicationService",
     "JobFitApplicationService",
+    "JobRecommendationApplicationService",
     "InterviewApplicationService",
     "MaterialApplicationService",
     "MaterialAgentApplicationService",

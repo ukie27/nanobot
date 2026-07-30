@@ -15,6 +15,8 @@ class ExtractedFact:
     value: str
     evidence_text: str
     confidence: float
+    title: str | None = None
+    evidence_texts: tuple[str, ...] = ()
 
 
 class FactExtractor(Protocol):

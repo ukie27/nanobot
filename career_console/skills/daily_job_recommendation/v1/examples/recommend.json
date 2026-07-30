@@ -1,0 +1,22 @@
+{
+  "schemaVersion": "daily_job_recommendation.v1",
+  "decision": "recommend",
+  "score": 82,
+  "priority": "high",
+  "summary": "岗位方向与已确认的后端开发方向一致，核心技能有直接项目证据。",
+  "matchedDirections": ["后端开发"],
+  "strengths": ["Python 与 SQL 有已确认项目证据"],
+  "gaps": ["需要补充分布式系统面试准备"],
+  "hardGateFailures": [],
+  "preferenceReasons": ["符合手动选择的后端开发方向"],
+  "actionSuggestion": "查看官网截止时间并准备针对性简历。",
+  "assessments": [
+    {
+      "requirementId": "requirement-1",
+      "decision": "matched",
+      "evidenceFactIds": ["fact-1"],
+      "transferableFactIds": [],
+      "rationale": "已确认项目事实直接支持该要求。"
+    }
+  ]
+}

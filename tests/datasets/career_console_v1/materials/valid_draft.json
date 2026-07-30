@@ -1,0 +1,9 @@
+{
+  "directionId": "direction-api",
+  "bullets": [
+    {
+      "text": "为校园活动平台设计幂等报名接口并补充并发测试。",
+      "factReferences": ["fact-project-001"]
+    }
+  ]
+}

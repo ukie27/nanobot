@@ -583,15 +583,76 @@ class OpenAICompatProvider(LLMProvider):
         )
 
     @staticmethod
-    def _handle_error(e: Exception) -> LLMResponse:
+    def _provider_error_code(e: Exception) -> str:
         response = getattr(e, "response", None)
-        body = getattr(e, "doc", None) or getattr(response, "text", None)
-        body_text = str(body).strip() if body is not None else ""
-        msg = f"Error: {body_text[:500]}" if body_text else f"Error calling LLM: {e}"
+        status_code = getattr(e, "status_code", None) or getattr(
+            response, "status_code", None
+        )
+        body = getattr(e, "body", None) or getattr(e, "doc", None)
+        error = body.get("error") if isinstance(body, dict) else None
+        error_map = (
+            error
+            if isinstance(error, dict)
+            else body
+            if isinstance(body, dict)
+            else {}
+        )
+        provider_text = " ".join(
+            str(error_map.get(key) or "").casefold()
+            for key in ("type", "code", "message")
+        )
+
+        if status_code in {401, 403} or any(
+            marker in provider_text
+            for marker in ("authentication", "invalid api key", "unauthorized")
+        ):
+            return "provider_authentication_failed"
+        if status_code == 429:
+            return "provider_rate_limited"
+        if status_code == 402 or any(
+            marker in provider_text for marker in ("balance", "billing", "quota")
+        ):
+            return "provider_account_unavailable"
+        if status_code == 404 or (
+            "model" in provider_text
+            and any(
+                marker in provider_text
+                for marker in ("not found", "permission", "exist")
+            )
+        ):
+            return "provider_model_unavailable"
+        if isinstance(status_code, int) and status_code >= 500:
+            return "provider_unavailable"
+        exception_name = type(e).__name__.casefold()
+        if "timeout" in exception_name:
+            return "provider_timeout"
+        if "connect" in exception_name or "connection" in str(e).casefold():
+            return "provider_connection_failed"
+        return "provider_rejected"
+
+    @classmethod
+    def _handle_error(cls, e: Exception) -> LLMResponse:
+        response = getattr(e, "response", None)
+        error_code = cls._provider_error_code(e)
+        messages = {
+            "provider_authentication_failed": "Error calling LLM: authentication failed.",
+            "provider_rate_limited": "Error calling LLM: 429 rate limit.",
+            "provider_account_unavailable": "Error calling LLM: account unavailable.",
+            "provider_model_unavailable": "Error calling LLM: model unavailable.",
+            "provider_unavailable": "Error calling LLM: provider temporarily unavailable.",
+            "provider_timeout": "Error calling LLM: timeout.",
+            "provider_connection_failed": "Error calling LLM: connection failed.",
+            "provider_rejected": "Error calling LLM: request rejected.",
+        }
         retry_after = LLMProvider._extract_retry_after_from_headers(getattr(response, "headers", None))
         if retry_after is None:
-            retry_after = LLMProvider._extract_retry_after(msg)
-        return LLMResponse(content=msg, finish_reason="error", retry_after=retry_after)
+            retry_after = LLMProvider._extract_retry_after(str(e))
+        return LLMResponse(
+            content=messages[error_code],
+            finish_reason="error",
+            error_code=error_code,
+            retry_after=retry_after,
+        )
 
     # ------------------------------------------------------------------
     # Public API

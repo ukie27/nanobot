@@ -1,0 +1,4 @@
+{
+  "validDraft": {"unsupportedClaims": 0, "decision": "ready_for_user_review"},
+  "hallucinatedDraft": {"unsupportedClaims": 1, "decision": "reject"}
+}

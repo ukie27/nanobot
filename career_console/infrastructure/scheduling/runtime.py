@@ -8,7 +8,7 @@ from typing import Any
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import select
+from sqlalchemy import delete, func, select
 
 from career_console.infrastructure.configuration.schema import (
     ConfigurationUpdate,
@@ -60,7 +60,14 @@ class CareerSchedulerRuntime:
             "outbox_dispatched": 0, "leases_recovered": 0,
             "connector_runs_processed": 0,
             "mail_analysis_processed": 0, "profile_jobs_processed": 0,
+            "profile_digest_generated": 0, "profile_insights_created": 0,
+            "profile_insights_reused": 0, "profile_insight_skipped": 0,
+            "profile_insight_failed": 0, "profile_strategy_processed": 0,
             "channel_sent": 0, "channel_failed": 0,
+            "opportunities_discovered": 0, "jd_discovered": 0,
+            "jd_imported": 0, "recommendations_created": 0,
+            "recommendations_rejected": 0, "jd_discovery_failed": 0,
+            "recommendation_failed": 0,
         }
         errors: list[str] = []
         if config.enabled:
@@ -68,7 +75,11 @@ class CareerSchedulerRuntime:
                 self._merge(counters, self._safe(errors, "reminders", self.task_service.run_due, now=now))
             if config.connector_jobs_enabled:
                 for name, service in (("boss", self.connector_service), ("nowcoder", self.nowcoder_service), ("imap", self.mail_service)):
-                    result = self._safe(errors, name, service.run_due)
+                    result = self._safe(
+                        errors, name, service.run_due,
+                        **({"now": now or started} if name == "nowcoder" else {})
+                    )
+                    self._merge(counters, result)
                     counters["connector_runs_processed"] += int(result is not None)
                 for _ in range(10):
                     result = self._safe(errors, "mail_analysis", self.mail_service.process_next_analysis_job)
@@ -78,8 +89,10 @@ class CareerSchedulerRuntime:
             if config.profile_maintenance_enabled and self._profile_due(
                 config.profile_maintenance_time, now or started
             ) and not self._profile_completed_today(now or started):
-                result = self._safe(errors, "profile_memory", self.profile_memory.run_due)
-                counters["profile_jobs_processed"] += int(bool(result))
+                result = self._safe(
+                    errors, "profile_memory", self.profile_memory.run_due, now=now or started
+                )
+                self._merge(counters, result)
                 self._safe(errors, "profile_impacts", self.profile_impacts.enqueue_pending)
                 for _ in range(20):
                     result = self._safe(errors, "profile_impacts", self.profile_impacts.process_next)
@@ -109,6 +122,8 @@ class CareerSchedulerRuntime:
         )
         with self.session_factory() as session:
             session.add(row)
+            session.flush()
+            self._prune_runs(session, reference_time=finished)
             session.commit()
         return {"id": row.id, "trigger_type": trigger_type, "status": status,
                 "counters": counters, "error_codes": errors,
@@ -116,6 +131,7 @@ class CareerSchedulerRuntime:
 
     def list_runs(self, limit: int = 50) -> dict[str, Any]:
         with self.session_factory() as session:
+            total = session.scalar(select(func.count()).select_from(SchedulerRunModel)) or 0
             rows = session.scalars(select(SchedulerRunModel).order_by(
                 SchedulerRunModel.started_at.desc()
             ).limit(max(1, min(limit, 200)))).all()
@@ -124,7 +140,23 @@ class CareerSchedulerRuntime:
                       "error_codes": json.loads(row.error_codes_json),
                       "started_at": row.started_at, "finished_at": row.finished_at}
                      for row in rows]
-        return {"items": items, "total": len(items)}
+        return {"items": items, "total": total}
+
+    @staticmethod
+    def _prune_runs(session: Any, *, reference_time: datetime) -> None:
+        cutoff = reference_time - timedelta(days=30)
+        session.execute(
+            delete(SchedulerRunModel).where(SchedulerRunModel.started_at < cutoff)
+        )
+        stale_ids = session.scalars(
+            select(SchedulerRunModel.id)
+            .order_by(SchedulerRunModel.started_at.desc())
+            .offset(200)
+        ).all()
+        if stale_ids:
+            session.execute(
+                delete(SchedulerRunModel).where(SchedulerRunModel.id.in_(stale_ids))
+            )
 
     @staticmethod
     def _safe(errors: list[str], name: str, function: Any, **kwargs: Any) -> Any:

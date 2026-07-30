@@ -22,6 +22,7 @@ from career_console.infrastructure.database.models import (
     ApplicationEventProposalModel,
     ApplicationMaterialSnapshotModel,
     ApplicationModel,
+    ApplicationResumeBindingModel,
     CompanyModel,
     JobMatchAnalysisModel,
     JobPostModel,
@@ -32,6 +33,7 @@ from career_console.infrastructure.database.models import (
     MailMessageModel,
     MaterialDraftModel,
     MaterialExportModel,
+    ResumeDefaultModel,
     ResumeModel,
     ResumeVersionModel,
     ReviewTaskModel,
@@ -54,7 +56,12 @@ class SqlAlchemyApplicationGateway:
         now = datetime.now(UTC)
         with self._session_factory() as session:
             existing = session.scalar(
-                select(ApplicationModel).where(ApplicationModel.job_post_id == job_post_id)
+                select(ApplicationModel)
+                .where(
+                    ApplicationModel.job_post_id == job_post_id,
+                    ApplicationModel.archived_at.is_(None),
+                )
+                .order_by(ApplicationModel.created_at.desc())
             )
             if existing is not None:
                 self._link_mail_to_application(session, existing)
@@ -87,17 +94,6 @@ class SqlAlchemyApplicationGateway:
                     code="job_analysis_required",
                 )
             company = session.get(CompanyModel, post.company_id)
-            has_final = session.scalar(
-                select(MaterialDraftModel.id).where(
-                    MaterialDraftModel.job_post_id == post.id,
-                    MaterialDraftModel.status == "final",
-                )
-            )
-            initial_status = (
-                ApplicationStatus.READY_TO_APPLY
-                if has_final is not None
-                else ApplicationStatus.PREPARING_MATERIALS
-            )
             application = ApplicationModel(
                 id=str(uuid4()),
                 job_post_id=post.id,
@@ -129,13 +125,9 @@ class SqlAlchemyApplicationGateway:
                 session,
                 application,
                 event_type="application_status_changed",
-                target=initial_status,
+                target=ApplicationStatus.PREPARING_MATERIALS,
                 occurred_at=now,
-                note=(
-                    "Final material is available."
-                    if initial_status == ApplicationStatus.READY_TO_APPLY
-                    else "Application materials must be prepared before submission."
-                ),
+                note="Application materials must be bound before submission.",
                 source="system",
                 idempotency_key=f"initialize:{application.id}",
             )
@@ -154,40 +146,147 @@ class SqlAlchemyApplicationGateway:
         with self._session_factory() as session:
             return self._view(session, self._application(session, application_id))
 
-    def mark_job_ready(self, job_post_id: str) -> int:
-        """Advance tracked applications when their first Final material becomes available."""
+    def bind_resume(
+        self,
+        application_id: str,
+        *,
+        expected_version: int,
+        command_id: str,
+        resume_version_id: str | None,
+        use_default: bool,
+        source: str,
+        reason: str,
+    ) -> dict[str, Any]:
         now = datetime.now(UTC)
         with self._session_factory() as session:
-            applications = session.scalars(
-                select(ApplicationModel).where(
-                    ApplicationModel.job_post_id == job_post_id,
-                    ApplicationModel.current_status == ApplicationStatus.PREPARING_MATERIALS.value,
+            application = self._application(session, application_id)
+            if self._command_exists(session, application.id, command_id):
+                return self._view(session, application)
+            self._expect_version(application, expected_version)
+            if application.current_status not in {
+                ApplicationStatus.DISCOVERED.value,
+                ApplicationStatus.PREPARING_MATERIALS.value,
+                ApplicationStatus.READY_TO_APPLY.value,
+            }:
+                raise CareerDomainError(
+                    "Submitted or completed applications cannot replace their resume binding.",
+                    code="application_resume_binding_locked",
                 )
-            ).all()
-            for application in applications:
+            version = (
+                self._default_resume_version(session)
+                if use_default
+                else session.get(ResumeVersionModel, resume_version_id)
+            )
+            if version is None:
+                raise EntityNotFoundError("Finalized resume version was not found.")
+            self._validate_bindable_version(session, version)
+            current = session.scalar(
+                select(ApplicationResumeBindingModel).where(
+                    ApplicationResumeBindingModel.application_id == application.id,
+                    ApplicationResumeBindingModel.status == "active",
+                )
+            )
+            if current is not None and current.resume_version_id == version.id:
+                return self._view(session, application)
+            binding_id = str(uuid4())
+            binding = ApplicationResumeBindingModel(
+                id=binding_id,
+                application_id=application.id,
+                resume_id=version.resume_id,
+                resume_version_id=version.id,
+                status="active",
+                source=source,
+                reason=reason.strip()[:500],
+                version=1,
+                replaced_by_binding_id=None,
+                created_at=now,
+                updated_at=now,
+                replaced_at=None,
+                locked_at=None,
+            )
+            if current is not None:
+                current.status = "replaced"
+                current.replaced_at = now
+                current.updated_at = now
+                current.version += 1
+                session.flush()
+            session.add(binding)
+            session.flush()
+            if current is not None:
+                current.replaced_by_binding_id = binding_id
+                session.flush()
+            if application.current_status != ApplicationStatus.READY_TO_APPLY.value:
                 self._append_event(
                     session,
                     application,
                     event_type="application_status_changed",
                     target=ApplicationStatus.READY_TO_APPLY,
                     occurred_at=now,
-                    note="Final material is available.",
-                    source="system",
-                    idempotency_key=f"material-ready:{application.id}",
+                    note="A finalized resume version was bound to this application.",
+                    source=source,
+                    idempotency_key=command_id,
                 )
-                self._advance(application, now)
+            else:
+                self._append_event(
+                    session,
+                    application,
+                    event_type="application_resume_rebound",
+                    target=ApplicationStatus.READY_TO_APPLY,
+                    occurred_at=now,
+                    note="The active resume binding was replaced.",
+                    source=source,
+                    idempotency_key=command_id,
+                )
+            self._advance(application, now)
             session.commit()
-            return len(applications)
+            return self._view(session, application)
+
+    def get_default_resume(self) -> dict[str, Any] | None:
+        with self._session_factory() as session:
+            row = session.scalar(select(ResumeDefaultModel))
+            if row is None:
+                return None
+            return self._resume_default_view(session, row)
+
+    def set_default_resume(
+        self, *, resume_id: str, expected_version: int | None
+    ) -> dict[str, Any]:
+        now = datetime.now(UTC)
+        with self._session_factory() as session:
+            resume = session.get(ResumeModel, resume_id)
+            if resume is None:
+                raise EntityNotFoundError("Resume series was not found.")
+            self._latest_finalized_resume_version(session, resume.id)
+            row = session.scalar(select(ResumeDefaultModel))
+            if row is None:
+                row = ResumeDefaultModel(
+                    id=str(uuid4()),
+                    resume_id=resume.id,
+                    version=1,
+                    created_at=now,
+                    updated_at=now,
+                )
+                session.add(row)
+            else:
+                if expected_version is None or row.version != expected_version:
+                    raise VersionConflictError("Default resume changed after it was loaded.")
+                if row.resume_id != resume.id:
+                    row.resume_id = resume.id
+                    row.version += 1
+                    row.updated_at = now
+            session.commit()
+            return self._resume_default_view(session, row)
 
     def submit_application(
         self,
         application_id: str,
         *,
         expected_version: int,
-        material_ids: list[str],
+        resume_version_id: str,
         occurred_at: datetime,
         note: str,
         command_id: str,
+        source: str = "user",
     ) -> dict[str, Any]:
         now = datetime.now(UTC)
         with self._session_factory() as session:
@@ -198,14 +297,29 @@ class SqlAlchemyApplicationGateway:
             ensure_transition(
                 ApplicationStatus(application.current_status), ApplicationStatus.SUBMITTED
             )
-            unique_ids = list(dict.fromkeys(material_ids))
-            if not unique_ids:
-                raise CareerDomainError(
-                    "At least one Final material must be selected for submission.",
-                    code="submission_material_required",
+            binding = session.scalar(
+                select(ApplicationResumeBindingModel).where(
+                    ApplicationResumeBindingModel.application_id == application.id,
+                    ApplicationResumeBindingModel.status == "active",
                 )
-            for material_id in unique_ids:
-                self._snapshot_material(session, application, material_id, now)
+            )
+            if binding is None:
+                raise CareerDomainError(
+                    "A finalized resume must be bound before submission.",
+                    code="application_resume_binding_required",
+                )
+            if binding.resume_version_id != resume_version_id:
+                raise CareerDomainError(
+                    "The confirmed resume version does not match the active binding.",
+                    code="application_resume_confirmation_mismatch",
+                )
+            version = session.get(ResumeVersionModel, binding.resume_version_id)
+            self._validate_bindable_version(session, version)
+            self._snapshot_resume_version(session, application, version, now)
+            binding.status = "locked"
+            binding.locked_at = now
+            binding.updated_at = now
+            binding.version += 1
             self._append_event(
                 session,
                 application,
@@ -213,7 +327,7 @@ class SqlAlchemyApplicationGateway:
                 target=ApplicationStatus.SUBMITTED,
                 occurred_at=occurred_at,
                 note=note,
-                source="user",
+                source=source,
                 idempotency_key=command_id,
             )
             self._advance(application, now)
@@ -238,6 +352,7 @@ class SqlAlchemyApplicationGateway:
             if self._command_exists(session, application.id, command_id):
                 return self._view(session, application)
             self._expect_version(application, expected_version)
+            self._require_dedicated_lifecycle_command(target_status)
             ensure_transition(ApplicationStatus(application.current_status), target_status)
             self._append_event(
                 session,
@@ -460,6 +575,7 @@ class SqlAlchemyApplicationGateway:
                     return self._proposal_view(session, proposal, application, task)
                 self._expect_version(application, application_expected_version)
                 target = ApplicationStatus(proposal.proposed_status)
+                self._require_dedicated_lifecycle_command(target)
                 ensure_transition(ApplicationStatus(application.current_status), target)
                 self._append_event(
                     session,
@@ -490,29 +606,40 @@ class SqlAlchemyApplicationGateway:
             session.commit()
             return self._proposal_view(session, proposal, application, task)
 
-    def _snapshot_material(
-        self, session: Session, application: ApplicationModel, material_id: str, now: datetime
+    @staticmethod
+    def _require_dedicated_lifecycle_command(target: ApplicationStatus) -> None:
+        if target == ApplicationStatus.READY_TO_APPLY:
+            raise CareerDomainError(
+                "Ready-to-apply status is created only by binding a finalized resume.",
+                code="application_resume_binding_required",
+            )
+        if target == ApplicationStatus.SUBMITTED:
+            raise CareerDomainError(
+                "Submitted status is created only by confirming the bound resume version.",
+                code="application_submission_confirmation_required",
+            )
+
+    def _snapshot_resume_version(
+        self,
+        session: Session,
+        application: ApplicationModel,
+        version: ResumeVersionModel,
+        now: datetime,
     ) -> None:
-        draft = session.get(MaterialDraftModel, material_id)
+        draft = session.get(MaterialDraftModel, version.material_draft_id)
         if draft is None:
-            raise EntityNotFoundError("Selected material was not found.")
-        if draft.job_post_id != application.job_post_id:
             raise CareerDomainError(
-                "Submission material belongs to another job post.",
-                code="application_material_job_mismatch",
+                "The bound resume version has no traceable finalized material.",
+                code="application_resume_material_missing",
             )
-        if draft.status != "final":
-            raise CareerDomainError(
-                "Only Final materials can be submitted.", code="application_material_not_final"
-            )
-        version = session.scalar(
-            select(ResumeVersionModel)
-            .where(ResumeVersionModel.material_draft_id == draft.id)
-            .order_by(ResumeVersionModel.version_number.desc())
-        )
         export = session.scalar(
             select(MaterialExportModel).where(MaterialExportModel.resume_version_id == version.id)
         )
+        if export is None:
+            raise CareerDomainError(
+                "The bound resume version has no verified export.",
+                code="application_resume_export_required",
+            )
         session.add(
             ApplicationMaterialSnapshotModel(
                 id=str(uuid4()),
@@ -524,9 +651,9 @@ class SqlAlchemyApplicationGateway:
                 rendered_text=version.rendered_text,
                 content_hash=version.content_hash,
                 fact_set_hash=version.fact_set_hash,
-                export_id=None if export is None else export.id,
-                export_sha256=None if export is None else export.sha256,
-                export_relative_path=None if export is None else export.relative_path,
+                export_id=export.id,
+                export_sha256=export.sha256,
+                export_relative_path=export.relative_path,
                 created_at=now,
             )
         )
@@ -645,6 +772,87 @@ class SqlAlchemyApplicationGateway:
                         reason=item.resolution_reason,
                     )
 
+    @staticmethod
+    def _validate_bindable_version(
+        session: Session, version: ResumeVersionModel | None
+    ) -> None:
+        if version is None or version.status != "final" or version.finalized_at is None:
+            raise CareerDomainError(
+                "Only a finalized resume version can be bound.",
+                code="application_resume_version_not_final",
+            )
+        if version.material_draft_id is None:
+            raise CareerDomainError(
+                "The finalized resume version must have traceable source material.",
+                code="application_resume_material_missing",
+            )
+        export = session.scalar(
+            select(MaterialExportModel.id).where(
+                MaterialExportModel.resume_version_id == version.id
+            )
+        )
+        if export is None:
+            raise CareerDomainError(
+                "The finalized resume version must have a verified export.",
+                code="application_resume_export_required",
+            )
+
+    def _latest_finalized_resume_version(
+        self, session: Session, resume_id: str
+    ) -> ResumeVersionModel:
+        version = session.scalar(
+            select(ResumeVersionModel)
+            .where(
+                ResumeVersionModel.resume_id == resume_id,
+                ResumeVersionModel.status == "final",
+            )
+            .order_by(
+                ResumeVersionModel.finalized_at.desc(),
+                ResumeVersionModel.version_number.desc(),
+            )
+        )
+        if version is None:
+            raise CareerDomainError(
+                "The selected resume series has no finalized version.",
+                code="default_resume_finalized_version_required",
+            )
+        self._validate_bindable_version(session, version)
+        return version
+
+    def _default_resume_version(self, session: Session) -> ResumeVersionModel:
+        row = session.scalar(select(ResumeDefaultModel))
+        if row is None:
+            raise CareerDomainError(
+                "No default resume is configured.",
+                code="default_resume_required",
+            )
+        return self._latest_finalized_resume_version(session, row.resume_id)
+
+    def _resume_default_view(
+        self, session: Session, row: ResumeDefaultModel
+    ) -> dict[str, Any]:
+        resume = session.get(ResumeModel, row.resume_id)
+        version = self._latest_finalized_resume_version(session, row.resume_id)
+        material_count = session.scalar(
+            select(func.count())
+            .select_from(MaterialDraftModel)
+            .where(MaterialDraftModel.resume_id == resume.id)
+        )
+        return {
+            "id": resume.id,
+            "name": resume.name,
+            "series_type": resume.series_type,
+            "parent_resume_id": resume.parent_resume_id,
+            "direction_label": resume.direction_label,
+            "material_count": material_count,
+            "latest_version": self._resume_version_summary(version),
+            "latest_finalized_version": self._resume_version_summary(version),
+            "is_default": True,
+            "default_version": row.version,
+            "created_at": self._utc(resume.created_at),
+            "updated_at": self._utc(resume.updated_at),
+        }
+
     def _view(self, session: Session, application: ApplicationModel) -> dict[str, Any]:
         result = self._summary(session, application)
         events = session.scalars(
@@ -664,11 +872,19 @@ class SqlAlchemyApplicationGateway:
             .order_by(ApplicationEventProposalModel.created_at.desc())
         ).all()
         available = session.scalars(
-            select(MaterialDraftModel).where(
-                MaterialDraftModel.job_post_id == application.job_post_id,
-                MaterialDraftModel.status == "final",
+            select(ResumeVersionModel)
+            .where(ResumeVersionModel.status == "final")
+            .order_by(
+                ResumeVersionModel.finalized_at.desc(),
+                ResumeVersionModel.version_number.desc(),
             )
         ).all()
+        bindings = session.scalars(
+            select(ApplicationResumeBindingModel)
+            .where(ApplicationResumeBindingModel.application_id == application.id)
+            .order_by(ApplicationResumeBindingModel.created_at)
+        ).all()
+        binding_views = [self._binding_view(session, item) for item in bindings]
         mail_analyses = session.scalars(
             select(MailIntelligenceAnalysisModel)
             .where(MailIntelligenceAnalysisModel.application_id == application.id)
@@ -679,18 +895,59 @@ class SqlAlchemyApplicationGateway:
                 "events": [self._event_view(item, item.id in superseded_ids) for item in events],
                 "material_snapshots": [self._snapshot_view(item) for item in snapshots],
                 "proposals": [self._proposal_plain(item) for item in proposals],
+                "resume_bindings": binding_views,
+                "active_resume_binding": next(
+                    (
+                        item
+                        for item in reversed(binding_views)
+                        if item["status"] in {"active", "locked"}
+                    ),
+                    None,
+                ),
                 "available_final_materials": [
                     {
-                        "id": item.id,
+                        "id": item.material_draft_id,
+                        "resume_id": item.resume_id,
+                        "resume_version_id": item.id,
+                        "version_number": item.version_number,
                         "name": session.get(ResumeModel, item.resume_id).name,
-                        "material_type": item.material_type,
+                        "title": item.title,
+                        "material_type": session.get(
+                            MaterialDraftModel, item.material_draft_id
+                        ).material_type,
+                        "finalized_at": self._utc(item.finalized_at),
                     }
                     for item in available
+                    if item.material_draft_id is not None
                 ],
                 "mail_evidence": [self._mail_evidence_view(session, item) for item in mail_analyses],
             }
         )
         return result
+
+    def _binding_view(
+        self, session: Session, binding: ApplicationResumeBindingModel
+    ) -> dict[str, Any]:
+        resume = session.get(ResumeModel, binding.resume_id)
+        version = session.get(ResumeVersionModel, binding.resume_version_id)
+        return {
+            "id": binding.id,
+            "application_id": binding.application_id,
+            "resume_id": binding.resume_id,
+            "resume_name": resume.name,
+            "resume_version_id": binding.resume_version_id,
+            "version_number": version.version_number,
+            "version_title": version.title,
+            "status": binding.status,
+            "source": binding.source,
+            "reason": binding.reason,
+            "version": binding.version,
+            "replaced_by_binding_id": binding.replaced_by_binding_id,
+            "created_at": self._utc(binding.created_at),
+            "updated_at": self._utc(binding.updated_at),
+            "replaced_at": self._utc(binding.replaced_at),
+            "locked_at": self._utc(binding.locked_at),
+        }
 
     def _mail_evidence_view(
         self, session: Session, analysis: MailIntelligenceAnalysisModel
@@ -835,6 +1092,22 @@ class SqlAlchemyApplicationGateway:
             "export_id": item.export_id,
             "export_sha256": item.export_sha256,
             "created_at": self._utc(item.created_at),
+        }
+
+    @staticmethod
+    def _resume_version_summary(version: ResumeVersionModel) -> dict[str, Any]:
+        return {
+            "id": version.id,
+            "parent_version_id": version.parent_version_id,
+            "source_resume_version_id": version.source_resume_version_id,
+            "version_scope": version.version_scope,
+            "version_number": version.version_number,
+            "status": version.status,
+            "title": version.title,
+            "content_hash": version.content_hash,
+            "fact_set_hash": version.fact_set_hash,
+            "created_at": SqlAlchemyApplicationGateway._utc(version.created_at),
+            "finalized_at": SqlAlchemyApplicationGateway._utc(version.finalized_at),
         }
 
     @staticmethod

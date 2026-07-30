@@ -7,7 +7,7 @@ from typing import Literal
 from uuid import uuid4
 
 from fastapi import APIRouter, Request, status
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from career_console.domain.applications import ApplicationStatus
 
@@ -32,9 +32,22 @@ class VersionedCommandRequest(BaseModel):
 
 
 class SubmitApplicationRequest(VersionedCommandRequest):
-    material_ids: list[str] = Field(min_length=1, max_length=10)
+    resume_version_id: str = Field(min_length=1, max_length=36)
     occurred_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     note: str = Field(default="", max_length=5_000)
+
+
+class BindApplicationResumeRequest(VersionedCommandRequest):
+    resume_version_id: str | None = Field(default=None, max_length=36)
+    use_default: bool = False
+    source: Literal["user", "generated", "mail_default", "migration"] = "user"
+    reason: str = Field(default="", max_length=500)
+
+    @model_validator(mode="after")
+    def select_exactly_one_resume_source(self) -> "BindApplicationResumeRequest":
+        if self.use_default == (self.resume_version_id is not None):
+            raise ValueError("必须且只能选择具体简历版本或默认简历。")
+        return self
 
 
 class AddApplicationEventRequest(VersionedCommandRequest):
@@ -116,8 +129,32 @@ class ApplicationMaterialSnapshotResponse(BaseModel):
 
 class AvailableFinalMaterialResponse(BaseModel):
     id: str
+    resume_id: str
+    resume_version_id: str
+    version_number: int
     name: str
+    title: str
     material_type: str
+    finalized_at: datetime
+
+
+class ApplicationResumeBindingResponse(BaseModel):
+    id: str
+    application_id: str
+    resume_id: str
+    resume_name: str
+    resume_version_id: str
+    version_number: int
+    version_title: str
+    status: Literal["active", "replaced", "locked"]
+    source: str
+    reason: str
+    version: int
+    replaced_by_binding_id: str | None
+    created_at: datetime
+    updated_at: datetime
+    replaced_at: datetime | None
+    locked_at: datetime | None
 
 
 class ApplicationMailEvidenceItemResponse(BaseModel):
@@ -176,6 +213,8 @@ class ApplicationResponse(ApplicationSummaryResponse):
     events: list[ApplicationEventResponse]
     material_snapshots: list[ApplicationMaterialSnapshotResponse]
     proposals: list[ApplicationProposalResponse]
+    resume_bindings: list[ApplicationResumeBindingResponse]
+    active_resume_binding: ApplicationResumeBindingResponse | None
     available_final_materials: list[AvailableFinalMaterialResponse]
     mail_evidence: list[ApplicationMailEvidenceResponse]
 
@@ -204,6 +243,15 @@ def create_application(body: CreateApplicationRequest, request: Request) -> dict
 @router.get("/{application_id}", response_model=ApplicationResponse)
 def get_application(application_id: str, request: Request) -> dict:
     return request.app.state.application_gateway.get_application(application_id)
+
+
+@router.post("/{application_id}/resume-bindings", response_model=ApplicationResponse)
+def bind_application_resume(
+    application_id: str, body: BindApplicationResumeRequest, request: Request
+) -> dict:
+    return request.app.state.application_service.bind_resume(
+        application_id, **body.model_dump()
+    )
 
 
 @router.post("/{application_id}/submit", response_model=ApplicationResponse)

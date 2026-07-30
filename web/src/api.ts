@@ -128,7 +128,8 @@ export interface AgentTaskConfiguration {
   reasoning_effort: "low" | "medium" | "high" | null;
 }
 export type AgentTaskName = "fact_extraction" | "mail_intelligence" | "profile_insight" |
-  "job_fit" | "resume_direction" | "resume_drafting" | "material_review";
+  "job_fit" | "resume_direction" | "resume_drafting" | "material_review" |
+  "daily_job_recommendation";
 export interface AgentConfiguration { tasks: Record<AgentTaskName, AgentTaskConfiguration> }
 export interface ProviderTestRun {
   id: string; provider_id: string; provider_type: ProviderType; model: string;
@@ -183,6 +184,9 @@ export interface SyncRun {
   id: string; trigger_type: string; status: string; discovered_count: number;
   created_count: number; updated_count: number; duplicate_count: number;
   quarantined_count: number; error_code: string | null; started_at: string; finished_at: string | null;
+  opportunities_discovered?: number; jd_discovered?: number; jd_imported?: number;
+  recommendations_created?: number; recommendations_rejected?: number;
+  jd_discovery_failed?: number; recommendation_failed?: number;
 }
 
 export interface QuarantinedEvent {
@@ -195,6 +199,9 @@ export interface BossConnector {
   profile_alias: string; search_query: string; city: string; result_limit: number;
   schedule_enabled: boolean; schedule_times: string[]; timezone: string;
   next_scan_at: string | null; health_status: string; last_error_code: string | null;
+  session_status: "authenticated" | "requires_login" | "expired" | "unknown" | "checking" | "unavailable";
+  session_identity: Record<string, string | boolean | number>;
+  session_checked_at: string | null;
   last_success_at: string | null; version: number; runs: SyncRun[]; quarantine: QuarantinedEvent[];
 }
 
@@ -208,6 +215,9 @@ export interface NowcoderConnector {
   search_query: string; city: string; result_limit: number;
   schedule_enabled: boolean; schedule_times: string[]; timezone: string;
   next_scan_at: string | null; health_status: string; last_error_code: string | null;
+  session_status: "authenticated" | "requires_login" | "expired" | "unknown" | "checking" | "unavailable";
+  session_identity: Record<string, string | boolean | number>;
+  session_checked_at: string | null;
   last_success_at: string | null; version: number; runs: SyncRun[];
   quarantine: QuarantinedEvent[]; automatic_scope: "today";
   manual_lookback_options: number[];
@@ -370,6 +380,29 @@ export interface RecruitmentOpportunityDetail extends RecruitmentOpportunity {
 }
 export interface RecruitmentOpportunityList { items: RecruitmentOpportunity[]; total: number }
 
+export interface JobRecommendationAssessment {
+  requirementId: string; decision: "matched" | "gap";
+  evidenceFactIds: string[]; transferableFactIds: string[]; rationale: string;
+}
+export interface JobRecommendationContent {
+  schemaVersion: "daily_job_recommendation.v1"; decision: "recommend" | "reject";
+  score: number; priority: "high" | "medium" | "low"; summary: string;
+  matchedDirections: string[]; strengths: string[]; gaps: string[];
+  hardGateFailures: string[]; preferenceReasons: string[]; actionSuggestion: string;
+  assessments: JobRecommendationAssessment[];
+}
+export interface JobRecommendation {
+  id: string; job_post_id: string; job_post_version_id: string;
+  source_opportunity_id: string | null; agent_run_id: string;
+  application_id: string | null; company: string; title: string;
+  location: string | null; deadline_at: string | null; application_url: string | null;
+  schema_version: string; decision: "recommend" | "reject"; score: number;
+  priority: "high" | "medium" | "low"; content: JobRecommendationContent;
+  status: "active" | "accepted" | "dismissed" | "stale"; version: number;
+  recommended_at: string; resolved_at: string | null; resolution_reason: string | null;
+}
+export interface JobRecommendationList { items: JobRecommendation[]; total: number }
+
 export type MaterialType = "resume" | "cover_letter" | "introduction";
 export interface MaterialSummary {
   id: string; resume_id: string; name: string; material_type: MaterialType; status: "draft" | "reviewed" | "final";
@@ -402,6 +435,7 @@ export interface MaterialList { items: MaterialSummary[]; total: number }
 export interface ResumeSeries {
   id: string; name: string; series_type: "base" | "direction"; parent_resume_id: string | null;
   direction_label: string | null; material_count: number; latest_version: MaterialVersion | null;
+  latest_finalized_version: MaterialVersion | null; is_default: boolean; default_version: number | null;
   created_at: string; updated_at: string;
 }
 export interface ResumeSeriesList { items: ResumeSeries[]; total: number }
@@ -445,6 +479,17 @@ export interface ApplicationMaterialSnapshot {
   rendered_text: string; content_hash: string; fact_set_hash: string; export_id: string | null;
   export_sha256: string | null; created_at: string;
 }
+export interface ApplicationResumeBinding {
+  id: string; application_id: string; resume_id: string; resume_name: string;
+  resume_version_id: string; version_number: number; version_title: string;
+  status: "active" | "replaced" | "locked"; source: string; reason: string; version: number;
+  replaced_by_binding_id: string | null; created_at: string; updated_at: string;
+  replaced_at: string | null; locked_at: string | null;
+}
+export interface AvailableFinalMaterial {
+  id: string; resume_id: string; resume_version_id: string; version_number: number;
+  name: string; title: string; material_type: string; finalized_at: string;
+}
 export interface ApplicationProposal {
   id: string; application_id: string; proposed_status: ApplicationStatus; occurred_at: string; note: string;
   source: string; source_ref: string | null; status: string; version: number; resolution_reason: string | null;
@@ -452,7 +497,9 @@ export interface ApplicationProposal {
 }
 export interface Application extends ApplicationSummary {
   events: ApplicationEvent[]; material_snapshots: ApplicationMaterialSnapshot[]; proposals: ApplicationProposal[];
-  available_final_materials: Array<{ id: string; name: string; material_type: string }>;
+  resume_bindings: ApplicationResumeBinding[];
+  active_resume_binding: ApplicationResumeBinding | null;
+  available_final_materials: AvailableFinalMaterial[];
   mail_evidence: Array<{
     analysis_id: string; message_id: string; agent_run_id: string; sender: string; subject: string;
     sent_at: string | null; message_type: string; summary: string; match_confidence: number;
@@ -588,6 +635,8 @@ export interface UnifiedReviewTask {
   entity_subtype: string | null; can_resolve_inline: boolean;
   resolved_at: string | null; resolution: string | null; resolution_reason: string | null;
   resolved_by: string | null;
+  bundle_type: string | null; section_type: string | null; aggregate_key: string | null;
+  item_count: number; items: UnifiedReviewTask[];
 }
 export interface AgentRunAudit {
   id: string; task_type: string; execution_mode: string; implementation: string;
@@ -608,6 +657,7 @@ export interface IntegrationHealth {
 interface ProblemDetails {
   title?: string;
   detail?: string | { message?: string; code?: string };
+  code?: string;
   correlationId?: string;
 }
 
@@ -616,6 +666,7 @@ export class ApiError extends Error {
     message: string,
     readonly status: number,
     readonly correlationId?: string,
+    readonly code?: string,
   ) {
     super(message);
   }
@@ -637,6 +688,7 @@ async function getJson<T>(path: string): Promise<T> {
       problemMessage(problem, response.status),
       response.status,
       problem.correlationId,
+      problem.code,
     );
   }
   return (await response.json()) as T;
@@ -697,6 +749,7 @@ async function parseResponse<T>(response: Response): Promise<T> {
       problemMessage(problem, response.status),
       response.status,
       problem.correlationId,
+      problem.code,
     );
   }
   return (await response.json()) as T;
@@ -797,6 +850,7 @@ export const scanBossConnector = () => sendJson<SyncRun>("/api/v1/connectors/bos
 export const getNowcoderConnector = () => getJson<NowcoderConnector>("/api/v1/connectors/nowcoder");
 export const configureNowcoderConnector = (body: NowcoderConnectorUpdate) => putJson<NowcoderConnector>("/api/v1/connectors/nowcoder", body);
 export const checkNowcoderConnector = () => sendJson<{ status: string; opencli_version?: string; error_code?: string }>("/api/v1/connectors/nowcoder/health", {});
+export const loginNowcoderConnector = () => sendJson<Record<string, unknown>>("/api/v1/connectors/nowcoder/login", { timeout: 300 });
 export const scanNowcoderConnector = (lookbackDays: 0 | 7 | 14 | 30) => sendJson<SyncRun>("/api/v1/connectors/nowcoder/scan", { lookback_days: lookbackDays });
 export const getMailConnector = () => getJson<MailConnector>("/api/v1/mail/account");
 export const configureMailConnector = (body: ImapAccountUpdate) => putJson<MailConnector>("/api/v1/mail/account", body);
@@ -854,6 +908,15 @@ export const getUnifiedReviews = (status = "open") =>
   getJson<{ items: UnifiedReviewTask[]; total: number }>(
     `/api/v1/runtime/reviews?status=${encodeURIComponent(status)}`,
   );
+export const getUnifiedReview = (id: string) =>
+  getJson<UnifiedReviewTask>(`/api/v1/runtime/reviews/${encodeURIComponent(id)}`);
+export const resolveUnifiedReviewBundle = (
+  review: UnifiedReviewTask,
+  resolution: "confirmed" | "rejected",
+) => sendJson<UnifiedReviewTask>(
+  `/api/v1/runtime/reviews/${encodeURIComponent(review.id)}/resolve`,
+  { expected_version: review.version, resolution, reason: "用户在确认中心整组处理" },
+);
 export const getAgentRuns = () =>
   getJson<{ items: AgentRunAudit[]; total: number }>("/api/v1/runtime/agent-runs");
 export const getIntegrationHealth = () => getJson<IntegrationHealth>("/api/v1/workspace/integration-health");
@@ -921,6 +984,25 @@ export const triageOpportunity = (
   triage_status,
   expected_version: opportunity.version,
 });
+export const getJobRecommendations = (status: JobRecommendation["status"] = "active") =>
+  getJson<JobRecommendationList>(
+    `/api/v1/job-recommendations?status=${encodeURIComponent(status)}`,
+  );
+export const dismissJobRecommendation = (recommendation: JobRecommendation) =>
+  sendJson<JobRecommendation>(`/api/v1/job-recommendations/${recommendation.id}/dismiss`, {
+    expected_version: recommendation.version,
+    reason: "用户从岗位推荐池移除",
+  });
+export const acceptJobRecommendation = (
+  recommendation: JobRecommendation,
+  commandId: string,
+) => sendJson<JobRecommendation>(
+  `/api/v1/job-recommendations/${recommendation.id}/accept`,
+  {
+    expected_version: recommendation.version,
+    command_id: commandId,
+  },
+);
 export const getJobPost = (id: string) => getJson<JobPost>(`/api/v1/job-posts/${id}`);
 export const importJobText = (name: string, text: string, opportunity_id?: string, mail_analysis_id?: string) =>
   sendJson<JobPost>("/api/v1/job-posts/import-text", { name, text, opportunity_id, mail_analysis_id });
@@ -949,6 +1031,12 @@ export const resolveResumeDirections = (proposal: ResumeDirectionProposal, resol
   });
 export const getMaterials = () => getJson<MaterialList>("/api/v1/materials");
 export const getResumeSeries = () => getJson<ResumeSeriesList>("/api/v1/resumes");
+export const getDefaultResume = () => getJson<ResumeSeries | null>("/api/v1/resumes/default");
+export const setDefaultResume = (resume: ResumeSeries, currentDefault: ResumeSeries | null) =>
+  putJson<ResumeSeries>("/api/v1/resumes/default", {
+    resume_id: resume.id,
+    expected_version: currentDefault?.default_version ?? null,
+  });
 export const forkResumeFromMaterial = (body: { material_id: string; series_type: "base" | "direction";
   name: string; parent_resume_id?: string; direction_label?: string }) =>
   sendJson<ResumeSeries>("/api/v1/resumes/from-material", body);
@@ -974,8 +1062,23 @@ export const finalizeMaterial = (material: Material) =>
 export const getApplications = () => getJson<ApplicationList>("/api/v1/applications");
 export const getApplication = (id: string) => getJson<Application>(`/api/v1/applications/${id}`);
 export const createApplication = (job_post_id: string) => sendJson<Application>("/api/v1/applications", { job_post_id });
-export const submitApplication = (application: Application, material_ids: string[], occurred_at: string, note: string) =>
-  sendJson<Application>(`/api/v1/applications/${application.id}/submit`, { expected_version: application.version, material_ids, occurred_at, note });
+export const bindApplicationResume = (
+  application: Application,
+  selection: { resume_version_id?: string; use_default: boolean; reason: string },
+) => sendJson<Application>(`/api/v1/applications/${application.id}/resume-bindings`, {
+  expected_version: application.version,
+  command_id: globalThis.crypto?.randomUUID?.() ?? `bind-${Date.now()}`,
+  source: "user",
+  ...selection,
+});
+export const submitApplication = (application: Application, resume_version_id: string, occurred_at: string, note: string) =>
+  sendJson<Application>(`/api/v1/applications/${application.id}/submit`, {
+    expected_version: application.version,
+    resume_version_id,
+    occurred_at,
+    note,
+    command_id: globalThis.crypto?.randomUUID?.() ?? `submit-${Date.now()}`,
+  });
 export const addApplicationEvent = (application: Application, target_status: ApplicationStatus, occurred_at: string, note: string) =>
   sendJson<Application>(`/api/v1/applications/${application.id}/events`, { expected_version: application.version, target_status, occurred_at, note });
 export const correctApplicationEvent = (application: Application, eventId: string, occurred_at: string, note: string) =>

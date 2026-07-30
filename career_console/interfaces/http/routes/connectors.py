@@ -64,12 +64,12 @@ def boss_scan(request: Request) -> dict:
         return request.app.state.connector_service.scan()
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except RuntimeError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except OpenCliError as exc:
         raise HTTPException(
             status_code=409, detail={"code": exc.code, "message": str(exc)}
         ) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.post("/run-due")
@@ -102,6 +102,16 @@ def nowcoder_health(request: Request) -> dict:
     return request.app.state.nowcoder_connector_service.health()
 
 
+@router.post("/nowcoder/login")
+def nowcoder_login(body: ConnectorLoginRequest, request: Request) -> dict:
+    try:
+        return request.app.state.nowcoder_connector_service.login(timeout=body.timeout)
+    except OpenCliError as exc:
+        raise HTTPException(
+            status_code=409, detail={"code": exc.code, "message": str(exc)}
+        ) from exc
+
+
 @router.post("/nowcoder/scan")
 def nowcoder_scan(body: NowcoderScanRequest, request: Request) -> dict:
     try:
@@ -110,9 +120,9 @@ def nowcoder_scan(body: NowcoderScanRequest, request: Request) -> dict:
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    except RuntimeError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except OpenCliError as exc:
         raise HTTPException(
             status_code=409, detail={"code": exc.code, "message": str(exc)}
         ) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc

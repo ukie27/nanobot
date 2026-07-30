@@ -30,6 +30,7 @@ class FakeOpenCliRunner:
         self.evaluation = "公开校招项目"
         self.nowcoder_application_url = "https://example.com/apply"
         self.invalid = False
+        self.nowcoder_status_error: str | None = None
         self.calls: list[str] = []
         self.collected_at = (
             datetime.now(ZoneInfo("Asia/Shanghai")).astimezone(UTC).isoformat()
@@ -44,6 +45,22 @@ class FakeOpenCliRunner:
 
     def boss_login(self, *, profile: str, timeout: int = 300) -> dict:
         self.calls.append(f"login:{profile}:{timeout}")
+        return {"status": "login_complete", "logged_in": True}
+
+    def nowcoder_status(self) -> dict:
+        self.calls.append("nowcoder-status")
+        if self.nowcoder_status_error:
+            raise OpenCliError(self.nowcoder_status_error, "牛客会话状态不可用。")
+        return {
+            "logged_in": True,
+            "site": "nowcoder",
+            "display_name": "测试用户",
+            "token": "must-be-filtered",
+            "cookie": "must-be-filtered",
+        }
+
+    def nowcoder_login(self, *, timeout: int = 300) -> dict:
+        self.calls.append(f"nowcoder-login:{timeout}")
         return {"status": "login_complete", "logged_in": True}
 
     def boss_search(self, *, profile: str, query: str, city: str, limit: int) -> list[dict]:
@@ -128,6 +145,8 @@ def _enable(client: TestClient) -> None:
         },
     )
     assert response.status_code == 200, response.text
+    health = client.post("/api/v1/connectors/boss/health", json={})
+    assert health.status_code == 200, health.text
 
 
 def test_boss_health_login_scan_idempotency_and_versioning(tmp_path: Path) -> None:
@@ -199,8 +218,12 @@ def test_automatic_discovery_is_nowcoder_today_only(tmp_path: Path, monkeypatch)
             },
         )
         assert saved.status_code == 200, saved.text
+        health = client.post("/api/v1/connectors/nowcoder/health", json={})
+        assert health.status_code == 200, health.text
         service = client.app.state.nowcoder_connector_service
-        monkeypatch.setattr(service.gateway, "due", lambda *, connector_id: True)
+        monkeypatch.setattr(
+            service.gateway, "due", lambda *, connector_id, now=None: True
+        )
 
         run = service.run_due()
         assert run is not None
@@ -225,11 +248,23 @@ def test_nowcoder_today_scan_and_manual_lookback_are_separate(tmp_path: Path) ->
             },
         )
         assert saved.status_code == 200, saved.text
+        initial = client.get("/api/v1/connectors/nowcoder").json()
+        assert initial["session_status"] == "unknown"
         assert saved.json()["timezone"] == "Asia/Shanghai"
 
         health = client.post("/api/v1/connectors/nowcoder/health", json={})
         assert health.status_code == 200
         assert health.json()["status"] == "healthy"
+        config = health.json()["config"]
+        assert config["session_status"] == "authenticated"
+        assert config["session_checked_at"]
+        assert config["session_identity"] == {
+            "logged_in": True,
+            "site": "nowcoder",
+            "display_name": "测试用户",
+        }
+        assert "token" not in health.json()["config"]["session_identity"]
+        assert "cookie" not in health.json()["config"]["session_identity"]
 
         today = client.post(
             "/api/v1/connectors/nowcoder/scan", json={"lookback_days": 0}
@@ -365,6 +400,8 @@ def test_nowcoder_quarantines_unsafe_application_url(tmp_path: Path) -> None:
             },
         )
         assert saved.status_code == 200, saved.text
+        health = client.post("/api/v1/connectors/nowcoder/health", json={})
+        assert health.status_code == 200, health.text
         runner.nowcoder_application_url = "javascript:alert(1)"
 
         response = client.post(
@@ -373,6 +410,65 @@ def test_nowcoder_quarantines_unsafe_application_url(tmp_path: Path) -> None:
         assert response.status_code == 200, response.text
         assert response.json()["quarantined_count"] == 1
         assert client.get("/api/v1/opportunities").json()["total"] == 0
+    finally:
+        client.__exit__(None, None, None)
+
+
+def test_nowcoder_scan_requires_authenticated_session_and_login_route(
+    tmp_path: Path,
+) -> None:
+    client, runner = _client(tmp_path)
+    try:
+        saved = client.put(
+            "/api/v1/connectors/nowcoder",
+            json={
+                "enabled": True,
+                "search_query": "",
+                "city": "全国",
+                "result_limit": 500,
+                "schedule_enabled": False,
+                "schedule_times": ["09:00"],
+            },
+        )
+        assert saved.status_code == 200, saved.text
+        denied = client.post(
+            "/api/v1/connectors/nowcoder/scan", json={"lookback_days": 0}
+        )
+        assert denied.status_code == 409
+        assert denied.json()["code"] == ConnectorError.AUTH_REQUIRED
+
+        login = client.post(
+            "/api/v1/connectors/nowcoder/login", json={"timeout": 60}
+        )
+        assert login.status_code == 200, login.text
+        assert runner.calls[-2:] == ["nowcoder-login:60", "nowcoder-status"]
+        config = client.get("/api/v1/connectors/nowcoder").json()
+        assert config["session_status"] == "authenticated"
+        assert config["session_checked_at"]
+    finally:
+        client.__exit__(None, None, None)
+
+
+@pytest.mark.parametrize(
+    ("error_code", "expected_status"),
+    [
+        (ConnectorError.AUTH_REQUIRED, "requires_login"),
+        (ConnectorError.BRIDGE_UNAVAILABLE, "unavailable"),
+    ],
+)
+def test_nowcoder_health_maps_session_failures(
+    tmp_path: Path, error_code: str, expected_status: str
+) -> None:
+    client, runner = _client(tmp_path)
+    try:
+        runner.nowcoder_status_error = error_code
+        health = client.post("/api/v1/connectors/nowcoder/health", json={})
+        assert health.status_code == 200, health.text
+        assert health.json()["status"] == expected_status
+        config = health.json()["config"]
+        assert config["session_status"] == expected_status
+        assert config["session_checked_at"]
+        assert config["session_identity"] == {}
     finally:
         client.__exit__(None, None, None)
 
@@ -448,6 +544,29 @@ def test_opencli_argv_and_write_command_allowlist(monkeypatch: pytest.MonkeyPatc
     ]
     assert captured["shell"] is False
     assert captured["timeout"] == 15
+
+    runner.nowcoder_status()
+    assert captured["argv"] == [
+        "opencli.exe",
+        "nowcoder",
+        "whoami",
+        "-f",
+        "json",
+    ]
+    assert captured["timeout"] == 15
+
+    runner.nowcoder_login(timeout=60)
+    assert captured["argv"] == [
+        "opencli.exe",
+        "nowcoder",
+        "login",
+        "--timeout",
+        "60",
+        "-f",
+        "json",
+    ]
+    assert captured["timeout"] == 75
+
     with pytest.raises(OpenCliError) as caught:
         runner._run("career", "send", [])
     assert caught.value.code == ConnectorError.COMMAND_DENIED
@@ -511,8 +630,8 @@ def test_upgrade_from_part5_creates_backup_and_connector_schema(tmp_path: Path) 
     command.upgrade(alembic_config(settings), "20260724_0006")
     with TestClient(create_app(settings)) as client:
         assert client.get("/api/v1/connectors/boss").status_code == 200
-    assert database_revision(settings.database_path) == "20260728_0028"
-    assert list(settings.backups_dir.glob("*pre-202607280028.sqlite3"))
+    assert database_revision(settings.database_path) == "20260729_0031"
+    assert list(settings.backups_dir.glob("*pre-202607290031.sqlite3"))
     with sqlite3.connect(settings.database_path) as connection:
         tables = {
             row[0]

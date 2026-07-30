@@ -1,0 +1,8 @@
+task_type: mail_intelligence
+skill_version: v2
+checks:
+  - output_matches_schema
+  - evidence_is_exact_input_substring
+  - timestamps_have_explicit_offset
+  - candidate_ids_are_allowlisted
+  - no_tool_calls

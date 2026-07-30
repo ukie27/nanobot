@@ -14,6 +14,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -145,6 +146,9 @@ class ConnectorConfigModel(Base):
     scan_lease_run_id: Mapped[str | None] = mapped_column(String(36))
     scan_lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     health_status: Mapped[str] = mapped_column(String(32), nullable=False, default="unknown")
+    session_status: Mapped[str] = mapped_column(String(32), nullable=False, default="unknown")
+    session_identity_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    session_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_error_code: Mapped[str | None] = mapped_column(String(120))
     last_success_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
@@ -582,6 +586,65 @@ class ReviewTaskModel(Base):
     )
 
 
+class ReviewBundleModel(Base):
+    __tablename__ = "review_bundles"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    bundle_type: Mapped[str] = mapped_column(String(80), nullable=False)
+    source_type: Mapped[str] = mapped_column(String(80), nullable=False)
+    source_entity_id: Mapped[str] = mapped_column(String(100), nullable=False)
+    title: Mapped[str] = mapped_column(String(300), nullable=False)
+    summary: Mapped[str] = mapped_column(Text, nullable=False)
+    section_type: Mapped[str | None] = mapped_column(String(80))
+    aggregate_key: Mapped[str | None] = mapped_column(String(160))
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="open")
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    priority: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    agent_run_id: Mapped[str | None] = mapped_column(
+        ForeignKey("agent_runs.id", ondelete="SET NULL")
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    resolution: Mapped[str | None] = mapped_column(String(24))
+    resolution_reason: Mapped[str | None] = mapped_column(String(500))
+    resolved_by: Mapped[str | None] = mapped_column(String(80))
+
+    __table_args__ = (
+        Index("ix_review_bundles_queue", "status", "priority", "created_at"),
+        UniqueConstraint(
+            "bundle_type",
+            "source_type",
+            "source_entity_id",
+            "section_type",
+            "aggregate_key",
+            name="uq_review_bundle_source",
+        ),
+    )
+
+
+class ReviewBundleItemModel(Base):
+    __tablename__ = "review_bundle_items"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    bundle_id: Mapped[str] = mapped_column(
+        ForeignKey("review_bundles.id", ondelete="CASCADE"), nullable=False
+    )
+    review_task_id: Mapped[str] = mapped_column(
+        ForeignKey("review_tasks.id", ondelete="CASCADE"), nullable=False
+    )
+    entity_type: Mapped[str] = mapped_column(String(80), nullable=False)
+    entity_id: Mapped[str] = mapped_column(String(100), nullable=False)
+    display_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    required: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("bundle_id", "review_task_id", name="uq_review_bundle_task"),
+        Index("ix_review_bundle_items_bundle_order", "bundle_id", "display_order"),
+    )
+
+
 class AgentRunModel(Base):
     __tablename__ = "agent_runs"
 
@@ -883,6 +946,61 @@ class JobFitProposalModel(Base):
     )
 
 
+class JobRecommendationModel(Base):
+    __tablename__ = "job_recommendations"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    job_post_id: Mapped[str] = mapped_column(
+        ForeignKey("job_posts.id", ondelete="CASCADE"), nullable=False
+    )
+    job_post_version_id: Mapped[str] = mapped_column(
+        ForeignKey("job_post_versions.id", ondelete="CASCADE"), nullable=False
+    )
+    source_opportunity_id: Mapped[str | None] = mapped_column(
+        ForeignKey("recruitment_opportunities.id", ondelete="SET NULL")
+    )
+    agent_run_id: Mapped[str] = mapped_column(
+        ForeignKey("agent_runs.id", ondelete="RESTRICT"), nullable=False
+    )
+    profile_id: Mapped[str] = mapped_column(
+        ForeignKey("candidate_profiles.id", ondelete="CASCADE"), nullable=False
+    )
+    fact_set_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    preference_set_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    input_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    output_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    schema_version: Mapped[str] = mapped_column(String(48), nullable=False)
+    decision: Mapped[str] = mapped_column(String(16), nullable=False)
+    score: Mapped[int] = mapped_column(Integer, nullable=False)
+    priority: Mapped[str] = mapped_column(String(16), nullable=False)
+    content_json: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(24), nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    application_id: Mapped[str | None] = mapped_column(
+        ForeignKey("applications.id", ondelete="SET NULL")
+    )
+    recommended_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    resolution_reason: Mapped[str | None] = mapped_column(String(500))
+    __table_args__ = (
+        UniqueConstraint(
+            "job_post_version_id",
+            "fact_set_hash",
+            "preference_set_hash",
+            name="uq_job_recommendation_input",
+        ),
+        CheckConstraint(
+            "status IN ('active','accepted','dismissed','stale')",
+            name="ck_job_recommendation_status",
+        ),
+        CheckConstraint(
+            "decision IN ('recommend','reject')",
+            name="ck_job_recommendation_decision",
+        ),
+        Index("ix_job_recommendations_pool", "status", "priority", "recommended_at"),
+        Index("ix_job_recommendations_job", "job_post_id", "recommended_at"),
+    )
+
+
 class ResumeDirectionProposalModel(Base):
     __tablename__ = "resume_direction_proposals"
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
@@ -1006,6 +1124,17 @@ class ResumeModel(Base):
         ForeignKey("resumes.id", ondelete="RESTRICT")
     )
     direction_label: Mapped[str | None] = mapped_column(String(120))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class ResumeDefaultModel(Base):
+    __tablename__ = "resume_defaults"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    resume_id: Mapped[str] = mapped_column(
+        ForeignKey("resumes.id", ondelete="CASCADE"), nullable=False, unique=True
+    )
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
@@ -1161,7 +1290,7 @@ class ApplicationModel(Base):
     __tablename__ = "applications"
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     job_post_id: Mapped[str] = mapped_column(
-        ForeignKey("job_posts.id", ondelete="RESTRICT"), nullable=False, unique=True
+        ForeignKey("job_posts.id", ondelete="RESTRICT"), nullable=False
     )
     job_post_version_id: Mapped[str] = mapped_column(
         ForeignKey("job_post_versions.id", ondelete="RESTRICT"), nullable=False
@@ -1175,6 +1304,48 @@ class ApplicationModel(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     __table_args__ = (Index("ix_applications_status_updated", "current_status", "updated_at"),)
+
+
+class ApplicationResumeBindingModel(Base):
+    __tablename__ = "application_resume_bindings"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    application_id: Mapped[str] = mapped_column(
+        ForeignKey("applications.id", ondelete="CASCADE"), nullable=False
+    )
+    resume_id: Mapped[str] = mapped_column(
+        ForeignKey("resumes.id", ondelete="RESTRICT"), nullable=False
+    )
+    resume_version_id: Mapped[str] = mapped_column(
+        ForeignKey("resume_versions.id", ondelete="RESTRICT"), nullable=False
+    )
+    status: Mapped[str] = mapped_column(String(24), nullable=False)
+    source: Mapped[str] = mapped_column(String(32), nullable=False)
+    reason: Mapped[str] = mapped_column(String(500), nullable=False, default="")
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    replaced_by_binding_id: Mapped[str | None] = mapped_column(
+        ForeignKey("application_resume_bindings.id", ondelete="RESTRICT")
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    replaced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    locked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('active','replaced','locked')",
+            name="ck_application_resume_binding_status",
+        ),
+        Index(
+            "uq_application_active_resume_binding",
+            "application_id",
+            unique=True,
+            sqlite_where=text("status = 'active'"),
+        ),
+        Index(
+            "ix_application_resume_bindings_history",
+            "application_id",
+            "created_at",
+        ),
+    )
 
 
 class ApplicationEventModel(Base):

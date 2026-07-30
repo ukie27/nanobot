@@ -1,0 +1,5 @@
+{
+  "strengths": ["幂等设计", "并发测试", "数据库基础"],
+  "growthItems": ["结构化项目介绍", "SQL 优化验证过程"],
+  "writeToProfileWithoutConfirmation": false
+}

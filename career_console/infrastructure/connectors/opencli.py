@@ -30,6 +30,8 @@ class OpenCliProcessRunner:
         ("boss", "login"),
         ("boss", "search"),
         ("boss", "detail"),
+        ("nowcoder", "whoami"),
+        ("nowcoder", "login"),
         ("nowcoder", "schedule"),
     }
 
@@ -95,6 +97,19 @@ class OpenCliProcessRunner:
                 ConnectorError.SCHEMA_INVALID, "OpenCLI 牛客日程输出不是对象数组。"
             )
         return payload
+
+    def nowcoder_status(self) -> dict[str, Any]:
+        return self._object(self._run_command("nowcoder", "whoami", [], timeout=15))
+
+    def nowcoder_login(self, *, timeout: int = 300) -> dict[str, Any]:
+        return self._object(
+            self._run_command(
+                "nowcoder",
+                "login",
+                ["--timeout", str(max(30, min(timeout, 600)))],
+                timeout=timeout + 15,
+            )
+        )
 
     def _run(
         self, profile: str, command: str, args: list[str], *, timeout: int | None = None

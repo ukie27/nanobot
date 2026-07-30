@@ -1,0 +1,7 @@
+{
+  "items": [
+    {"externalId": "", "sourceUrl": "not-a-url"},
+    {"externalId": "over-30-days", "publishedAt": "2026-06-20T08:00:00+08:00"}
+  ],
+  "expectedRejected": 2
+}

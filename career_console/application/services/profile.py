@@ -60,6 +60,13 @@ class ProfileApplicationService:
 
     def _save(self, *, parsed: ParsedDocumentLike, raw_content: bytes) -> dict[str, Any]:
         blob = self.blob_store.put(raw_content)
+        completed = self.gateway.get_completed_import(
+            sha256=blob.sha256,
+            extractor_name=self.extractor.name,
+            extractor_schema_version=self.extractor.schema_version,
+        )
+        if completed is not None:
+            return completed
         started = perf_counter()
         try:
             facts = self.extractor.extract(document_id=blob.sha256, text=parsed.text)
@@ -102,7 +109,10 @@ class ProfileApplicationService:
         return {
             "provider": type(provider).__name__ if provider is not None else "local",
             "model": getattr(self.extractor, "model", None),
-            "prompt_version": "profile_fact_extraction.v1",
+            "prompt_version": getattr(
+                self.extractor, "prompt_version", "profile_fact_extraction.v1"
+            ),
+            "skill_version": getattr(self.extractor, "skill_version", None),
             "duration_ms": max(0, round((perf_counter() - started) * 1000)),
             "input_tokens": usage.get("prompt_tokens") or usage.get("input_tokens"),
             "output_tokens": usage.get("completion_tokens") or usage.get("output_tokens"),

@@ -35,7 +35,7 @@ status_output="$(docker run --rm \
 printf '%s\n' "$status_output"
 printf '%s\n' "$status_output" | grep -F "CareerConsole v"
 printf '%s\n' "$status_output" | grep -F "Workspace: /data/CareerConsole"
-printf '%s\n' "$status_output" | grep -F "Revision: 20260728_0028"
+printf '%s\n' "$status_output" | grep -F "Revision: 20260729_0031"
 
 docker run --rm \
     -v "$workspace_mount:/data/CareerConsole" \

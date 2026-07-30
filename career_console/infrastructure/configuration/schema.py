@@ -81,6 +81,7 @@ class AgentTaskMappings(StrictModel):
     mail_intelligence: AgentTaskConfiguration = Field(default_factory=AgentTaskConfiguration)
     profile_insight: AgentTaskConfiguration = Field(default_factory=AgentTaskConfiguration)
     job_fit: AgentTaskConfiguration = Field(default_factory=AgentTaskConfiguration)
+    daily_job_recommendation: AgentTaskConfiguration = Field(default_factory=AgentTaskConfiguration)
     resume_direction: AgentTaskConfiguration = Field(default_factory=AgentTaskConfiguration)
     resume_drafting: AgentTaskConfiguration = Field(default_factory=lambda: AgentTaskConfiguration(max_tokens=8192))
     material_review: AgentTaskConfiguration = Field(default_factory=lambda: AgentTaskConfiguration(max_tokens=6144))

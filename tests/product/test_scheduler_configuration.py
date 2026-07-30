@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
 from career_console.infrastructure.scheduling import CareerSchedulerRuntime
+from career_console.infrastructure.database.models import SchedulerRunModel
 from career_console.infrastructure.settings import CareerSettings
 from career_console.interfaces.http import create_app
 
@@ -85,7 +86,11 @@ def test_profile_maintenance_runs_only_once_per_china_day(tmp_path: Path) -> Non
         runtime = client.app.state.scheduler_runtime
         calls = []
         runtime.profile_memory = SimpleNamespace(
-            run_due=lambda: calls.append("profile") or {"digest_id": "digest"}
+            run_due=lambda **_kwargs: calls.append("profile") or {
+                "profile_jobs_processed": 1,
+                "profile_digest_generated": 1,
+                "digest_id": "digest",
+            }
         )
         runtime.profile_impacts = SimpleNamespace(
             enqueue_pending=lambda: None, process_next=lambda: None
@@ -104,3 +109,44 @@ def test_profile_maintenance_runs_only_once_per_china_day(tmp_path: Path) -> Non
         runtime.run_once(trigger_type="manual", now=now)
         runtime.run_once(trigger_type="manual", now=now)
         assert calls == ["profile"]
+        latest = client.get("/api/v1/scheduler/runs").json()["items"][0]
+        assert latest["counters"]["profile_digest_generated"] == 0
+
+
+def test_scheduler_run_history_is_pruned_and_total_is_database_count(
+    tmp_path: Path,
+) -> None:
+    settings = CareerSettings(data_dir=tmp_path / "workspace")
+    with TestClient(create_app(settings)) as client:
+        runtime = client.app.state.scheduler_runtime
+        now = datetime(2026, 7, 29, 2, 0, tzinfo=UTC)
+        with runtime.session_factory() as session:
+            for index in range(205):
+                started = now - timedelta(minutes=index + 1)
+                session.add(SchedulerRunModel(
+                    id=f"run-{index:03d}",
+                    trigger_type="interval",
+                    status="succeeded",
+                    counters_json="{}",
+                    error_codes_json="[]",
+                    started_at=started,
+                    finished_at=started,
+                ))
+            old = now - timedelta(days=31)
+            session.add(SchedulerRunModel(
+                id="old-run",
+                trigger_type="interval",
+                status="failed",
+                counters_json="{}",
+                error_codes_json='["old_failure"]',
+                started_at=old,
+                finished_at=old,
+            ))
+            session.commit()
+
+        runtime.run_once(trigger_type="manual", now=now)
+        history = runtime.list_runs(limit=10)
+        assert history["total"] == 200
+        assert len(history["items"]) == 10
+        with runtime.session_factory() as session:
+            assert session.get(SchedulerRunModel, "old-run") is None

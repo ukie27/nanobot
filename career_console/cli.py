@@ -10,6 +10,7 @@ from rich.console import Console
 from rich.table import Table
 
 from career_console import __version__
+from career_console.application.services.review_maintenance import ReviewMaintenanceService
 from career_console.infrastructure.configuration import apply_stored_runtime_configuration
 from career_console.infrastructure.database import Database
 from career_console.infrastructure.database.backup import (
@@ -19,6 +20,13 @@ from career_console.infrastructure.database.backup import (
 from career_console.infrastructure.database.migrations import (
     head_revision,
     upgrade_to_head,
+)
+from career_console.infrastructure.database.profile_gateway import SqlAlchemyProfileGateway
+from career_console.infrastructure.database.runtime_gateway import SqlAlchemyRuntimeGateway
+from career_console.infrastructure.datasets import (
+    DatasetError,
+    DevelopmentDatasetManager,
+    ProductEvaluationManager,
 )
 from career_console.infrastructure.logging import configure_logging
 from career_console.infrastructure.runtime import CareerInstanceLock
@@ -32,7 +40,15 @@ app = typer.Typer(
     no_args_is_help=True,
 )
 workspace_app = typer.Typer(name="workspace", help="Create and select workspaces.")
+dev_app = typer.Typer(name="dev", help="Development and acceptance utilities.")
+dataset_app = typer.Typer(name="dataset", help="Manage deterministic test datasets.")
+evaluation_app = typer.Typer(name="eval", help="Validate and run product benchmarks.")
+review_app = typer.Typer(name="reviews", help="Inspect and repair review projections.")
 app.add_typer(workspace_app, name="workspace")
+app.add_typer(dev_app, name="dev")
+dev_app.add_typer(dataset_app, name="dataset")
+dev_app.add_typer(evaluation_app, name="eval")
+dev_app.add_typer(review_app, name="reviews")
 console = Console()
 
 
@@ -86,13 +102,8 @@ def serve(
     workspace: Path | None = typer.Option(None, "--workspace", help="Exact workspace path."),
     verbose: bool = typer.Option(False, "--verbose"),
 ) -> None:
-    if host not in {"127.0.0.1", "localhost", "::1", "0.0.0.0"}:
-        raise typer.BadParameter("Unsupported bind address.")
-    if host == "0.0.0.0":
-        console.print(
-            "[yellow]Warning: binding all interfaces; restrict access with a host firewall "
-            "or a loopback-only container port mapping.[/yellow]"
-        )
+    if host not in {"127.0.0.1", "localhost", "::1"}:
+        raise typer.BadParameter("CareerConsole only supports loopback bind addresses.")
     import uvicorn
 
     from career_console.interfaces.http import create_app
@@ -181,6 +192,167 @@ def status(
     console.print(f"Revision: {database_revision(settings.database_path) or 'not initialized'}")
 
 
+@dataset_app.command("validate")
+def validate_dataset() -> None:
+    """Validate the repository dataset without changing a workspace."""
+    try:
+        result = DevelopmentDatasetManager().validate()
+    except DatasetError as exc:
+        console.print(f"[red]Dataset validation failed:[/red] {exc}")
+        raise typer.Exit(2) from exc
+    console.print(
+        f"[green]Dataset valid.[/green] {result['dataset']} · "
+        f"{result['file_count']} files · {result['timezone']}"
+    )
+
+
+@dataset_app.command("seed")
+def seed_dataset(
+    scenario: str = typer.Option("full-journey", "--scenario"),
+    workspace: Path | None = typer.Option(
+        None, "--workspace", help="Marked test workspace; defaults to the active workspace."
+    ),
+) -> None:
+    """Copy a deterministic scenario into a marked test workspace."""
+    root = WorkspaceManager().resolve_active(workspace)
+    try:
+        result = DevelopmentDatasetManager().seed(root, scenario=scenario)
+    except DatasetError as exc:
+        console.print(f"[red]Dataset seed refused:[/red] {exc}")
+        raise typer.Exit(2) from exc
+    console.print(
+        f"[green]Dataset seeded.[/green] {result['scenario']} · "
+        f"{result['file_count']} files"
+    )
+    console.print(f"[dim]Target: {result['target']}[/dim]")
+
+
+@dataset_app.command("expect")
+def expect_dataset(
+    scenario: str = typer.Option("full-journey", "--scenario"),
+    workspace: Path | None = typer.Option(
+        None, "--workspace", help="Marked test workspace; defaults to the active workspace."
+    ),
+) -> None:
+    """Verify that a seeded test workspace still matches its inventory."""
+    root = WorkspaceManager().resolve_active(workspace)
+    try:
+        result = DevelopmentDatasetManager().expect(root, scenario=scenario)
+    except DatasetError as exc:
+        console.print(f"[red]Dataset expectation failed:[/red] {exc}")
+        raise typer.Exit(2) from exc
+    console.print(
+        f"[green]Dataset matches expectations.[/green] "
+        f"{result['scenario']} · {result['file_count']} files"
+    )
+
+
+@dataset_app.command("reset")
+def reset_dataset(
+    workspace: Path = typer.Option(
+        ..., "--workspace", help="Exact marked test workspace path."
+    ),
+) -> None:
+    """Remove only seeded dataset files from an explicitly marked test workspace."""
+    try:
+        result = DevelopmentDatasetManager().reset(workspace)
+    except DatasetError as exc:
+        console.print(f"[red]Dataset reset refused:[/red] {exc}")
+        raise typer.Exit(2) from exc
+    console.print(
+        f"[green]Dataset reset complete.[/green] "
+        f"{result['removed_file_count']} files removed"
+    )
+
+
+@evaluation_app.command("validate")
+def validate_evaluation() -> None:
+    """Validate benchmark definitions, gold outputs, and scoring invariants."""
+    try:
+        result = ProductEvaluationManager().validate()
+    except DatasetError as exc:
+        console.print(f"[red]Evaluation validation failed:[/red] {exc}")
+        raise typer.Exit(2) from exc
+    console.print(
+        f"[green]Evaluation valid.[/green] {result['benchmark']} · "
+        f"{result['case_count']} cases · {result['dimension_count']} dimensions · "
+        f"reference {result['reference_score']:.2f}"
+    )
+
+
+@evaluation_app.command("run")
+def run_evaluation(
+    results: Path | None = typer.Option(
+        None,
+        "--results",
+        help="Normalized evaluation-results JSON; defaults to the gold reference run.",
+    ),
+    report: Path | None = typer.Option(
+        None,
+        "--report",
+        help="Optional destination for the complete JSON evaluation report.",
+    ),
+) -> None:
+    """Score a normalized CareerConsole product run against the benchmark."""
+    manager = ProductEvaluationManager()
+    try:
+        outcome = manager.run(results_path=results)
+        report_path = manager.write_report(outcome, report) if report else None
+    except DatasetError as exc:
+        console.print(f"[red]Evaluation failed:[/red] {exc}")
+        raise typer.Exit(2) from exc
+    result_style = "green" if outcome["passed"] else "red"
+    console.print(
+        f"[{result_style}]Evaluation {'passed' if outcome['passed'] else 'failed'}."
+        f"[/{result_style}] score={outcome['score']:.2f} "
+        f"minimum={outcome['minimumScore']:.2f}"
+    )
+    for dimension in outcome["dimensions"]:
+        console.print(
+            f"  {dimension['name']}: {dimension['score']:.2f} "
+            f"({dimension['case_count']} cases)"
+        )
+    if outcome["criticalFailures"]:
+        console.print(
+            "[red]Critical failures:[/red] "
+            + ", ".join(outcome["criticalFailures"])
+        )
+    if report_path:
+        console.print(f"[dim]Report: {report_path}[/dim]")
+    if not outcome["passed"]:
+        raise typer.Exit(1)
+
+
+@review_app.command("clear-legacy-profile-facts")
+def clear_legacy_profile_facts(
+    workspace: Path | None = typer.Option(None, "--workspace", help="Exact workspace path."),
+    apply: bool = typer.Option(False, "--apply", help="Reject the matched legacy facts."),
+) -> None:
+    """Close obsolete candidate_fact.v1 reviews without deleting their evidence."""
+    settings = _settings(workspace)
+    database = Database(settings)
+    try:
+        service = ReviewMaintenanceService(
+            runtime_gateway=SqlAlchemyRuntimeGateway(database.session_factory),
+            profile_gateway=SqlAlchemyProfileGateway(database.session_factory),
+        )
+        matches = service.legacy_profile_fact_reviews()
+        console.print(
+            f"Matched legacy profile fact reviews: [bold]{len(matches)}[/bold]"
+        )
+        if not apply:
+            console.print("[dim]Preview only. Add --apply to reject the matched reviews.[/dim]")
+            return
+        result = service.reject_legacy_profile_fact_reviews(
+            reason="旧版 local_resume_extractor candidate_fact.v1 候选清理"
+        )
+        console.print(
+            f"[green]Rejected legacy reviews:[/green] {result['rejected']}"
+        )
+    finally:
+        database.close()
+
+
 def _writable(directory: Path) -> bool:
     try:
         directory.mkdir(parents=True, exist_ok=True)
@@ -199,3 +371,7 @@ def _port_available(port: int) -> bool:
             return True
         except OSError:
             return False
+
+
+if __name__ == "__main__":
+    app()

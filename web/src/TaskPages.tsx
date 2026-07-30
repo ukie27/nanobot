@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState, type FormEvent } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 
-import { addTaskReminder, cancelTask, completeTask, createTask, getApplications, getDashboard, getMaterials, getNotifications, getProfile, getTasks, getTodayOpportunities, postponeTask, readNotification, type CareerTask } from "./api";
+import { addTaskReminder, cancelTask, completeTask, createTask, getApplications, getDashboard, getJobRecommendations, getMaterials, getNotifications, getProfile, getTasks, postponeTask, readNotification, type CareerTask } from "./api";
 import { chinaInputToIso, formatChinaTime, isoToChinaInput, parseBackendTime } from "./time";
 
 const TYPE_LABELS: Record<string, string> = { custom: "自定义", application_plan: "投递计划", follow_up: "跟进", assessment: "测评", written_test: "笔试", interview: "面试", job_deadline: "岗位截止" };
@@ -11,7 +11,7 @@ const localInput = (value: Date | number = new Date(Date.now() + 24 * 3600_000))
 export function DashboardPage() {
   const client = useQueryClient();
   const dashboard = useQuery({ queryKey: ["dashboard"], queryFn: getDashboard, refetchInterval: 60_000 });
-  const opportunities = useQuery({ queryKey: ["opportunities", "today"], queryFn: getTodayOpportunities, refetchInterval: 60_000 });
+  const opportunities = useQuery({ queryKey: ["job-recommendations", "active"], queryFn: () => getJobRecommendations("active"), refetchInterval: 60_000 });
   const notifications = useQuery({ queryKey: ["notifications"], queryFn: getNotifications });
   const applications = useQuery({ queryKey: ["applications"], queryFn: getApplications });
   const materials = useQuery({ queryKey: ["materials"], queryFn: getMaterials });
@@ -39,7 +39,7 @@ export function DashboardPage() {
             : untrackedFinal
               ? { label: "建立申请进度", detail: `${untrackedFinal.company} · ${untrackedFinal.job_title} 已有定稿材料，但尚未开始跟踪。`, to: "/applications" }
       : todayOpportunities > 0
-        ? { label: "查看今天的新岗位", detail: `今天新增 ${todayOpportunities} 条招聘信息，可以开始筛选。`, to: "/opportunities" }
+        ? { label: "查看推荐岗位", detail: `当前有 ${todayOpportunities} 个经过分析的岗位值得关注。`, to: "/opportunities" }
         : confirmedFacts === 0
           ? { label: "导入个人资料", detail: "先建立已确认的职业事实，岗位分析和材料生成才有可靠依据。", to: "/documents" }
           : applications.data?.total
@@ -51,13 +51,13 @@ export function DashboardPage() {
       <Link className="download-button" to={nextAction.to}>开始处理</Link>
     </section>
     <nav className="quick-start" aria-label="常用操作">
-      <Link to="/opportunities"><strong>找岗位</strong><span>查看今天新增的招聘信息</span></Link>
+      <Link to="/opportunities"><strong>看推荐</strong><span>处理 Agent 筛选后的岗位</span></Link>
       <Link to="/job-posts"><strong>保存目标岗位</strong><span>导入并分析具体岗位</span></Link>
       <Link to="/applications"><strong>记进度</strong><span>维护投递和面试状态</span></Link>
       <Link to="/materials"><strong>改材料</strong><span>按目标岗位准备简历</span></Link>
     </nav>
-    <section className="metric-grid"><article><span>今日新机会</span><strong>{opportunities.data?.total ?? 0}</strong><small>北京时间当天由牛客收录</small></article><article><span>今日待办 / 逾期</span><strong>{dashboard.data?.today.length ?? 0} / {dashboard.data?.overdue.length ?? 0}</strong><small>需要完成或重新安排</small></article><article><span>未来流程</span><strong>{dashboard.data?.interviews.length ?? 0}</strong><small>7 天内测评、笔试、面试</small></article><article><span>待确认 / 冲突</span><strong>{dashboard.data?.pending_review_count ?? 0} / {dashboard.data?.conflict_count ?? 0}</strong><small>人工审查与时间冲突</small></article></section>
-    <section className="panel today-opportunities"><div className="panel-heading"><h2>今日招聘机会</h2><Link to="/opportunities">查看全部</Link></div>{opportunities.data?.items.slice(0, 5).map((item) => <Link to={`/job-posts?opportunityId=${encodeURIComponent(item.id)}`} key={item.id}><strong>{item.company} · {item.batch}</strong><span>{item.cities || "城市待确认"} · {item.careers || "方向待确认"}</span><em>{item.linked_jobs.length ? `已关联 ${item.linked_jobs.length} 个具体岗位` : "导入具体 JD"}</em></Link>)}{!opportunities.data?.total && <p>北京时间今天尚未收录新机会。</p>}</section>
+    <section className="metric-grid"><article><span>待处理推荐</span><strong>{opportunities.data?.total ?? 0}</strong><small>已完成 JD 解析与个性化筛选</small></article><article><span>今日待办 / 逾期</span><strong>{dashboard.data?.today.length ?? 0} / {dashboard.data?.overdue.length ?? 0}</strong><small>需要完成或重新安排</small></article><article><span>未来流程</span><strong>{dashboard.data?.interviews.length ?? 0}</strong><small>7 天内测评、笔试、面试</small></article><article><span>待确认 / 冲突</span><strong>{dashboard.data?.pending_review_count ?? 0} / {dashboard.data?.conflict_count ?? 0}</strong><small>人工审查与时间冲突</small></article></section>
+    <section className="panel today-opportunities"><div className="panel-heading"><h2>推荐岗位</h2><Link to="/opportunities">查看全部</Link></div>{opportunities.data?.items?.slice(0, 5).map((item) => <Link to="/opportunities" key={item.id}><strong>{item.company} · {item.title}</strong><span>{item.location || "地点待确认"} · {item.content.matchedDirections.join("、") || "综合匹配"}</span><em>{item.score} 分 · {item.priority === "high" ? "优先关注" : item.priority === "medium" ? "可以考虑" : "低优先级"}</em></Link>)}{!opportunities.data?.total && <p>当前没有经过筛选后值得关注的新岗位。</p>}</section>
     <div className="dashboard-grid"><TaskSection title="今天" items={dashboard.data?.today ?? []} empty="今天没有到期任务。" /><TaskSection title="即将进行" items={dashboard.data?.interviews ?? []} empty="未来 7 天没有测评或面试。" /><section className="panel notification-panel"><div className="panel-heading"><h2>本地通知</h2><span>{dashboard.data?.unread_notification_count ?? 0} 未读</span></div>{notifications.data?.items.map((item) => <article className={item.status} key={item.id}><strong>{item.title}</strong><p>{item.body}</p><small>{formatChinaTime(item.created_at)}（北京时间）</small>{item.status === "unread" && <button className="text-button" onClick={() => read.mutate(item.id)}>标记已读</button>}</article>)}{!notifications.data?.total && <p>尚无到期提醒。</p>}</section><TaskSection title="逾期事项" items={dashboard.data?.overdue ?? []} empty="没有逾期任务。" /></div>
     </>;
 }

@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState, type FormEvent } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 
 import {
   addManualFact,
@@ -20,6 +20,7 @@ import {
   importFile,
   importText,
   rejectFact,
+  ApiError,
   type CandidateFact,
 } from "./api";
 
@@ -72,10 +73,10 @@ export function ProfilePage() {
   );
   if (profile.isLoading || facts.isLoading) return <Loading />;
   return <>
-    <header className="page-header"><div><p className="eyebrow">用于匹配岗位和生成材料</p><h1>{profile.data?.display_name ?? "我的经历"}</h1><p>这里只展示你确认过的教育、项目、实习和技能信息。</p></div><span className="health-pill ok">已确认 {profile.data?.fact_counts.confirmed ?? 0}</span></header>
+    <header className="page-header"><div><p className="eyebrow">用于匹配岗位和生成材料</p><h1>{profile.data?.display_name ?? "我的经历"}</h1><p>这里只展示你确认过的完整教育、项目、实习、工作与技能信息组。</p></div><span className="health-pill ok">已确认 {profile.data?.fact_counts.confirmed ?? 0} 项</span></header>
     <section className="profile-next-steps">
       <Link to="/documents"><strong>导入简历或经历</strong><span>从文件和文本中提取内容</span></Link>
-      <Link to="/review"><strong>确认提取结果</strong><span>{profile.data?.fact_counts.proposed ?? 0} 条等待确认</span></Link>
+      <Link to="/review"><strong>确认提取结果</strong><span>{profile.data?.fact_counts.proposed ?? 0} 项完整信息等待确认</span></Link>
       <Link to="/materials"><strong>准备申请材料</strong><span>根据目标岗位修改简历</span></Link>
     </section>
     <section className="metric-grid profile-metrics">
@@ -90,8 +91,8 @@ export function ProfilePage() {
       <ProfileBusinessMemory />
     </details>
     <ManualFactForm />
-    {(facts.data?.total ?? 0) === 0 && <section className="empty-state"><div className="empty-icon">＋</div><h2>还没有已确认的经历</h2><p>先导入简历，然后在“简历内容确认”中检查提取结果。只有你确认的内容才会用于岗位分析和材料生成。</p><Link className="download-button" to="/documents">导入第一份资料</Link></section>}
-    {Object.entries(grouped).map(([category, items]) => items && <section className="panel fact-group" key={category}><div className="panel-heading"><h2>{CATEGORY_LABELS[category] ?? category}</h2><span>{items.length} 条</span></div>{items.map((fact) => <FactRow fact={fact} readonly key={fact.id} />)}</section>)}
+    {(facts.data?.total ?? 0) === 0 && <section className="empty-state"><div className="empty-icon">＋</div><h2>还没有已确认的经历</h2><p>先导入简历，然后在“简历内容确认”中检查完整业务对象。只有你确认的内容才会用于岗位分析和材料生成。</p><Link className="download-button" to="/documents">导入第一份资料</Link></section>}
+    {Object.entries(grouped).map(([category, items]) => items && <section className="panel fact-group" key={category}><div className="panel-heading"><h2>{CATEGORY_LABELS[category] ?? category}</h2><span>{items.length} 项</span></div>{items.map((fact) => <FactRow fact={fact} readonly key={fact.id} />)}</section>)}
   </>;
 }
 
@@ -139,7 +140,7 @@ export function ReviewPage() {
   const batch = useMutation({ mutationFn: () => batchConfirmFacts((query.data?.items ?? []).filter((fact) => selected.has(fact.id))), onSuccess: refresh });
   if (query.isLoading) return <Loading />;
   const items = query.data?.items ?? [];
-  return <><header className="page-header"><div><p className="eyebrow">确认后才会用于正式内容</p><h1>简历内容确认</h1><p>检查系统从简历和经历资料中提取的内容，修改错误后再确认。</p></div><button disabled={!selected.size || batch.isPending} onClick={() => batch.mutate()}>确认所选（{selected.size}）</button></header>
+  return <><header className="page-header"><div><p className="eyebrow">确认后才会用于正式内容</p><h1>简历内容确认</h1><p>每一项代表一段完整经历或一组完整信息。项目名称、职责、技术和成果不会再拆成零散事实。</p></div><button disabled={!selected.size || batch.isPending} onClick={() => batch.mutate()}>确认所选（{selected.size}）</button></header>
     {!items.length && <section className="empty-state"><div className="empty-icon">✓</div><h2>没有等待确认的内容</h2><p>导入简历或手动添加经历后，提取结果会出现在这里。</p><Link className="download-button" to="/documents">导入资料</Link></section>}
     <section className="review-list">{items.map((fact) => <FactReviewCard key={fact.id} fact={fact} selected={selected.has(fact.id)} toggle={() => setSelected((previous) => { const next = new Set(previous); next.has(fact.id) ? next.delete(fact.id) : next.add(fact.id); return next; })} act={(kind, value) => action.mutate({ kind, fact, value })} busy={action.isPending} />)}</section>
     {(action.error || batch.error) && <section className="notice error">{action.error?.message ?? batch.error?.message}</section>}
@@ -161,15 +162,41 @@ function FactRow({ fact }: { fact: CandidateFact; readonly?: boolean }) {
 }
 
 export function DocumentsPage() {
-  const client = useQueryClient(); const documents = useQuery({ queryKey: ["documents"], queryFn: getDocuments });
+  const client = useQueryClient(); const navigate = useNavigate(); const documents = useQuery({ queryKey: ["documents"], queryFn: getDocuments });
   const [result, setResult] = useState<string | null>(null);
-  const upload = useMutation({ mutationFn: importFile, onSuccess: async (doc) => { setResult(doc.duplicate ? "该文件已导入，没有产生重复事实。" : `已提取 ${doc.proposed_fact_count ?? 0} 条待审查事实。`); await client.invalidateQueries(); } });
-  const paste = useMutation({ mutationFn: ({ name, text }: { name: string; text: string }) => importText(name, text), onSuccess: async (doc) => { setResult(doc.duplicate ? "相同内容已导入。" : `已提取 ${doc.proposed_fact_count ?? 0} 条待审查事实。`); await client.invalidateQueries(); } });
+  const importedDocuments = documents.data?.items.filter((doc) => doc.parse_status === "parsed") ?? [];
+  const incompleteDocuments = documents.data?.items.filter((doc) => doc.parse_status !== "parsed") ?? [];
+  const finishImport = async (doc: Awaited<ReturnType<typeof importFile>>) => {
+    if (doc.duplicate) {
+      setResult("该内容已由当前简历提取 Agent 处理，无需重复提取。");
+    } else if ((doc.proposed_fact_count ?? 0) > 0) {
+      await client.invalidateQueries();
+      navigate("/reviews?category=profile");
+      return;
+    } else {
+      setResult("简历提取 Agent 已完成处理，但没有发现可供确认的职业档案对象。");
+    }
+    await client.invalidateQueries();
+  };
+  const upload = useMutation({ mutationFn: importFile, onMutate: () => setResult(null), onSuccess: finishImport });
+  const paste = useMutation({ mutationFn: ({ name, text }: { name: string; text: string }) => importText(name, text), onMutate: () => setResult(null), onSuccess: finishImport });
+  const importError = upload.error ?? paste.error;
+  const configurationError = importError instanceof ApiError && [
+    "fact_extraction_provider_authentication_failed",
+    "fact_extraction_provider_account_unavailable",
+    "fact_extraction_provider_model_unavailable",
+    "fact_extraction_provider_connection_failed",
+    "fact_extraction_provider_timeout",
+    "profile_fact_extraction_unavailable",
+  ].includes(importError.code ?? "");
   function pasteSubmit(event: FormEvent<HTMLFormElement>) { event.preventDefault(); const data = new FormData(event.currentTarget); paste.mutate({ name: String(data.get("name")), text: String(data.get("text")) }); }
   return <><header className="page-header"><div><p className="eyebrow">建立可靠的个人经历</p><h1>导入资料</h1><p>导入简历、项目复盘和经历材料。系统会先提取内容，由你确认后再用于岗位匹配和材料生成。</p></div></header>
-    <section className="import-grid"><form className="panel upload-card"><p className="eyebrow">文件导入</p><h2>上传文件</h2><p>支持 TXT、Markdown、PDF、DOCX，最大 10 MB。</p><label className="file-picker"><input type="file" aria-label="选择文件并导入" accept=".txt,.md,.markdown,.pdf,.docx" onChange={(event) => { const file = event.target.files?.[0]; if (file) upload.mutate(file); }} /><span>{upload.isPending ? "正在解析文件…" : "选择文件并导入"}</span></label></form>
-      <form className="panel" onSubmit={pasteSubmit}><p className="eyebrow">粘贴文本</p><h2>粘贴简历文本</h2><input name="name" placeholder="资料名称" required /><textarea name="text" rows={7} placeholder="粘贴简历内容" required /><button disabled={paste.isPending}>导入并提取内容</button></form></section>
-    {result && <section className="notice success"><strong>{result}</strong><div className="form-actions"><Link className="download-button" to="/review">检查提取结果</Link></div></section>}{(upload.error || paste.error) && <section className="notice error">{upload.error?.message ?? paste.error?.message}</section>}
-    <section className="panel"><div className="panel-heading"><h2>已导入文档</h2><span>{documents.data?.total ?? 0} 份</span></div>{documents.data?.items.map((doc) => <div className="document-row" key={doc.id}><div><strong>{doc.file_name}</strong><span>{(doc.size_bytes / 1024).toFixed(1)} KB · 已提取 {doc.fact_source_count} 条内容来源</span></div><details><summary>查看导入记录</summary><small>处理方式：{PARSER_LABELS[doc.parser_name] ?? "其他格式"}</small><code>内容校验：{doc.sha256.slice(0, 12)}</code></details></div>)}</section>
+    <section className="import-grid"><form className="panel upload-card"><p className="eyebrow">文件导入</p><h2>上传文件</h2><p>支持 TXT、Markdown、PDF、DOCX，最大 10 MB。</p><label className="file-picker"><input type="file" aria-label="选择文件并导入" accept=".txt,.md,.markdown,.pdf,.docx" disabled={upload.isPending} onChange={(event) => { const file = event.target.files?.[0]; if (file) upload.mutate(file); }} /><span>{upload.isPending ? "正在调用简历提取 Agent…" : "选择文件并导入"}</span></label></form>
+      <form className="panel" onSubmit={pasteSubmit}><p className="eyebrow">粘贴文本</p><h2>粘贴简历文本</h2><input name="name" placeholder="资料名称" required /><textarea name="text" rows={7} placeholder="粘贴简历内容" required /><button disabled={paste.isPending}>{paste.isPending ? "正在调用简历提取 Agent…" : "导入并提取内容"}</button></form></section>
+    {result && <section className="notice success"><strong>{result}</strong><div className="form-actions"><Link className="download-button" to="/review">检查提取结果</Link></div></section>}{importError && <section className="notice error"><strong>导入未完成</strong><p>{importError.message}</p>{configurationError && <div className="form-actions"><Link className="download-button" to="/settings?section=providers">前往 AI 服务设置</Link></div>}</section>}
+    <section className="panel"><div className="panel-heading"><h2>导入记录</h2><span>{importedDocuments.length} 份可用 · {incompleteDocuments.length} 份未完成</span></div>{documents.data?.items.map((doc) => {
+      const completed = doc.parse_status === "parsed";
+      return <div className="document-row" key={doc.id}><div><strong>{doc.file_name}</strong><span>{(doc.size_bytes / 1024).toFixed(1)} KB · {completed ? `已关联 ${doc.fact_source_count} 项档案对象` : "提取未完成，不会用于岗位匹配和材料生成"}</span></div><details><summary>查看导入记录</summary><small>处理方式：{PARSER_LABELS[doc.parser_name] ?? "其他格式"}</small>{!completed && <small>状态：提取失败，修复 AI 服务后可重新导入</small>}<code>内容校验：{doc.sha256.slice(0, 12)}</code></details></div>;
+    })}</section>
   </>;
 }

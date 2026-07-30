@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
@@ -15,7 +16,9 @@ from sqlalchemy.orm import Session, sessionmaker
 from career_console.application.ports.fact_extractor import ExtractedFact
 from career_console.domain.common.errors import CareerDomainError
 from career_console.domain.profile.entities import CandidateFact, FactCategory, FactStatus
+from career_console.domain.profile.privacy import contains_contact_information
 from career_console.infrastructure.database.models import (
+    AgentRunModel,
     BlobModel,
     CandidateFactModel,
     CandidateProfileModel,
@@ -23,11 +26,15 @@ from career_console.infrastructure.database.models import (
     FactRevisionModel,
     FactSourceModel,
     ProfileChangeEventModel,
+    ReviewBundleItemModel,
     ReviewTaskModel,
 )
 from career_console.infrastructure.database.review_runtime import (
     create_agent_run,
+    ensure_review_bundle,
     ensure_review_task,
+    link_review_task,
+    refresh_bundle_resolution,
     set_review_resolution,
 )
 
@@ -73,6 +80,32 @@ class SqlAlchemyProfileGateway:
     def __init__(self, session_factory: sessionmaker[Session]) -> None:
         self._session_factory = session_factory
 
+    def get_completed_import(
+        self,
+        *,
+        sha256: str,
+        extractor_name: str,
+        extractor_schema_version: str,
+    ) -> dict[str, Any] | None:
+        with self._session_factory() as session:
+            document = session.scalar(
+                select(DocumentModel).where(DocumentModel.sha256 == sha256)
+            )
+            if document is None:
+                return None
+            latest_run = self._latest_extraction_run(session, document.id)
+            if (
+                latest_run is None
+                or latest_run.status != "succeeded"
+                or latest_run.implementation != extractor_name
+                or latest_run.schema_version != extractor_schema_version
+            ):
+                return None
+            result = self._document_view(session, document, duplicate=True)
+            result["proposed_fact_count"] = 0
+            result["extracted_candidate_count"] = latest_run.output_count
+            return result
+
     def save_import(
         self,
         *,
@@ -91,21 +124,37 @@ class SqlAlchemyProfileGateway:
         provider: str | None = None,
         model: str | None = None,
         prompt_version: str | None = None,
+        skill_version: str | None = None,
         duration_ms: int | None = None,
         input_tokens: int | None = None,
         output_tokens: int | None = None,
         retry_count: int = 0,
     ) -> dict[str, Any]:
+        for fact in facts:
+            if any(
+                contains_contact_information(value)
+                for value in (fact.title or "", fact.value, fact.evidence_text)
+            ):
+                raise CareerDomainError(
+                    "Contact information cannot be stored as a career fact.",
+                    code="contact_information_not_allowed_in_fact",
+                )
         now = datetime.now(UTC)
         with self._session_factory() as session:
             existing = session.scalar(select(DocumentModel).where(DocumentModel.sha256 == sha256))
-            retrying_failed_extraction = (
-                existing is not None
-                and existing.parse_status == "extraction_failed"
-                and run_status == "succeeded"
-            )
-            if existing is not None and not retrying_failed_extraction:
-                return self._document_view(session, existing, duplicate=True)
+            if existing is not None:
+                latest_run = self._latest_extraction_run(session, existing.id)
+                current_extraction_completed = (
+                    latest_run is not None
+                    and latest_run.status == "succeeded"
+                    and latest_run.implementation == extractor_name
+                    and latest_run.schema_version == extractor_schema_version
+                )
+                if current_extraction_completed:
+                    result = self._document_view(session, existing, duplicate=True)
+                    result["proposed_fact_count"] = 0
+                    result["extracted_candidate_count"] = latest_run.output_count
+                    return result
             profile = self._ensure_profile(session, now)
             if existing is None:
                 blob = session.scalar(select(BlobModel).where(BlobModel.sha256 == sha256))
@@ -133,7 +182,9 @@ class SqlAlchemyProfileGateway:
                 session.add(document)
             else:
                 document = existing
-                document.parse_status = "parsed"
+                document.parse_status = (
+                    "parsed" if run_status == "succeeded" else "extraction_failed"
+                )
             # The persistence models intentionally have no ORM relationships;
             # flush principals explicitly so SQLite foreign keys never depend
             # on mapper ordering heuristics.
@@ -170,6 +221,7 @@ class SqlAlchemyProfileGateway:
                 provider=provider,
                 model=model,
                 prompt_version=prompt_version,
+                skill_version=skill_version,
                 input_entity_type="document",
                 input_entity_id=document.id,
                 input_revision=sha256,
@@ -185,6 +237,7 @@ class SqlAlchemyProfileGateway:
                 session.commit()
                 return self._document_view(session, document, duplicate=False)
             created_count = 0
+            bundles: dict[str, Any] = {}
             for extracted in facts:
                 normalized = self._normalize(extracted.value)
                 existing_fact = session.scalar(
@@ -211,16 +264,54 @@ class SqlAlchemyProfileGateway:
                     )
                     session.add(existing_fact)
                     session.flush()
-                    ensure_review_task(
+                    task = ensure_review_task(
                         session,
                         task_type="candidate_fact_review",
                         entity_type="candidate_fact",
                         entity_id=existing_fact.id,
-                        title=f"确认职业事实：{extracted.value[:200]}",
-                        summary=extracted.evidence_text,
+                        title=f"确认完整档案对象：{(extracted.title or extracted.value)[:200]}",
+                        summary="一项代表一段完整经历或一组语义完整的档案信息。",
                         source_type="agent_extraction",
                         priority=20,
                         agent_run_id=run.id,
+                        now=now,
+                    )
+                    category = extracted.category.value
+                    bundle = bundles.get(category)
+                    if bundle is None:
+                        category_title = {
+                            "basic": "基础信息",
+                            "education": "教育经历",
+                            "internship": "实习经历",
+                            "work": "工作经历",
+                            "project": "项目经历",
+                            "skill": "技能与能力",
+                            "award": "奖项荣誉",
+                            "certificate": "证书资质",
+                            "preference": "求职偏好",
+                            "constraint": "限制条件",
+                        }.get(category, "职业信息")
+                        bundle = ensure_review_bundle(
+                            session,
+                            bundle_type="profile_section",
+                            source_type="document_extraction",
+                            source_entity_id=document.id,
+                            section_type=category,
+                            aggregate_key=category,
+                            title=f"{document.file_name} · {category_title}",
+                            summary="按业务对象核对；每一项应是一段完整经历或完整信息组。",
+                            priority=20,
+                            agent_run_id=run.id,
+                            now=now,
+                        )
+                        bundles[category] = bundle
+                    link_review_task(
+                        session,
+                        bundle=bundle,
+                        task=task,
+                        entity_type="candidate_fact",
+                        entity_id=existing_fact.id,
+                        display_order=created_count,
                         now=now,
                     )
                     created_count += 1
@@ -239,6 +330,20 @@ class SqlAlchemyProfileGateway:
             result["proposed_fact_count"] = created_count
             result["extracted_candidate_count"] = len(facts)
             return result
+
+    @staticmethod
+    def _latest_extraction_run(
+        session: Session, document_id: str
+    ) -> AgentRunModel | None:
+        return session.scalar(
+            select(AgentRunModel)
+            .where(
+                AgentRunModel.document_id == document_id,
+                AgentRunModel.task_type == "profile_fact_extraction",
+            )
+            .order_by(AgentRunModel.created_at.desc(), AgentRunModel.id.desc())
+            .limit(1)
+        )
 
     def get_profile(self) -> dict[str, Any]:
         with self._session_factory() as session:
@@ -303,6 +408,7 @@ class SqlAlchemyProfileGateway:
             raise CareerDomainError("Fact value cannot be empty.", code="empty_fact_value")
         if not normalized_field_key:
             raise CareerDomainError("Fact field key cannot be empty.", code="invalid_fact_field")
+        self._reject_contact_information(value, source_note)
         with self._session_factory() as session:
             profile = self._ensure_profile(session, now)
             duplicate = session.scalar(
@@ -339,7 +445,7 @@ class SqlAlchemyProfileGateway:
                     created_at=now,
                 )
             )
-            ensure_review_task(
+            task = ensure_review_task(
                 session,
                 task_type="candidate_fact_review",
                 entity_type="candidate_fact",
@@ -348,6 +454,26 @@ class SqlAlchemyProfileGateway:
                 summary=source_note,
                 source_type="manual",
                 priority=10,
+                now=now,
+            )
+            bundle = ensure_review_bundle(
+                session,
+                bundle_type="profile_section",
+                source_type="manual",
+                source_entity_id=fact.id,
+                section_type=category_value,
+                aggregate_key=fact.id,
+                title="手动补充的职业信息",
+                summary="核对这项手动补充内容后再写入可信职业档案。",
+                priority=10,
+                now=now,
+            )
+            link_review_task(
+                session,
+                bundle=bundle,
+                task=task,
+                entity_type="candidate_fact",
+                entity_id=fact.id,
                 now=now,
             )
             self._add_profile_change(
@@ -381,6 +507,7 @@ class SqlAlchemyProfileGateway:
             elif action == "reject":
                 after = before.reject(now=now)
             elif action == "edit":
+                self._reject_contact_information(value or "")
                 after = before.edit(value or "", now=now)
             else:
                 raise CareerDomainError("Unsupported fact action.", code="invalid_fact_action")
@@ -449,10 +576,18 @@ class SqlAlchemyProfileGateway:
                         reason=reason,
                         reopen=True,
                     )
-            if after.status is FactStatus.CONFIRMED and after.field_key == "name":
+                bundle_ids = session.scalars(
+                    select(ReviewBundleItemModel.bundle_id).where(
+                        ReviewBundleItemModel.review_task_id == task.id
+                    )
+                ).all()
+                for bundle_id in bundle_ids:
+                    refresh_bundle_resolution(session, bundle_id, now=now)
+            display_name = self._display_name(after)
+            if after.status is FactStatus.CONFIRMED and display_name:
                 profile = session.get(CandidateProfileModel, after.profile_id)
                 if profile is not None:
-                    profile.display_name = after.value
+                    profile.display_name = display_name
                     profile.version += 1
                     profile.updated_at = now
             self._add_profile_change(
@@ -523,10 +658,18 @@ class SqlAlchemyProfileGateway:
                         resolution="confirmed",
                         reason="Batch confirmed by user",
                     )
-                if after.field_key == "name":
+                    bundle_ids = session.scalars(
+                        select(ReviewBundleItemModel.bundle_id).where(
+                            ReviewBundleItemModel.review_task_id == task.id
+                        )
+                    ).all()
+                    for bundle_id in bundle_ids:
+                        refresh_bundle_resolution(session, bundle_id, now=now)
+                display_name = self._display_name(after)
+                if display_name:
                     profile = session.get(CandidateProfileModel, after.profile_id)
                     if profile is not None:
-                        profile.display_name = after.value
+                        profile.display_name = display_name
                         profile.version += 1
                         profile.updated_at = now
                 self._add_profile_change(
@@ -534,6 +677,92 @@ class SqlAlchemyProfileGateway:
                     changed_fields={"previous_status": before.status.value, "status": "confirmed"},
                     impact_scopes=["profile", "job_fit", "material_strategy", "career_strategy"],
                     source="user", now=now, revision=after.version,
+                )
+            session.commit()
+            return [self._fact_view(session, row) for row, _before, _after in changes]
+
+    def batch_reject(
+        self,
+        *,
+        items: list[tuple[str, int]],
+        reason: str,
+        changed_by: str = "user",
+    ) -> list[dict[str, Any]]:
+        """Reject proposed facts atomically while retaining their audit trail."""
+        if len({fact_id for fact_id, _version in items}) != len(items):
+            raise CareerDomainError("Batch contains duplicate fact IDs.", code="invalid_batch")
+        normalized_reason = reason.strip()
+        if not normalized_reason:
+            raise CareerDomainError("Batch rejection requires a reason.", code="reason_required")
+        now = datetime.now(UTC)
+        with self._session_factory() as session:
+            changes: list[tuple[CandidateFactModel, CandidateFact, CandidateFact]] = []
+            for fact_id, expected_version in items:
+                row = session.get(CandidateFactModel, fact_id)
+                if row is None:
+                    raise EntityNotFoundError(f"Candidate fact {fact_id} was not found.")
+                if row.version != expected_version:
+                    raise VersionConflictError(
+                        f"Fact {fact_id} changed after it was loaded; current version is {row.version}."
+                    )
+                before = self._to_domain(row)
+                if before.status is not FactStatus.PROPOSED:
+                    raise CareerDomainError(
+                        f"Fact {fact_id} is not proposed and cannot be batch rejected.",
+                        code="invalid_fact_status",
+                    )
+                changes.append((row, before, before.reject(now=now)))
+            for row, before, after in changes:
+                row.status = after.status.value
+                row.version = after.version
+                row.updated_at = now
+                session.add(
+                    FactRevisionModel(
+                        id=str(uuid4()),
+                        fact_id=row.id,
+                        revision_number=after.version,
+                        previous_value=before.value,
+                        new_value=after.value,
+                        previous_status=before.status.value,
+                        new_status=after.status.value,
+                        reason=normalized_reason[:500],
+                        changed_by=changed_by.strip()[:32] or "user",
+                        created_at=now,
+                    )
+                )
+                task = session.scalar(
+                    select(ReviewTaskModel).where(
+                        ReviewTaskModel.entity_id == row.id,
+                        ReviewTaskModel.task_type == "candidate_fact_review",
+                    )
+                )
+                if task is not None:
+                    set_review_resolution(
+                        task,
+                        now=now,
+                        resolution="rejected",
+                        reason=normalized_reason,
+                        resolved_by=changed_by,
+                    )
+                    bundle_ids = session.scalars(
+                        select(ReviewBundleItemModel.bundle_id).where(
+                            ReviewBundleItemModel.review_task_id == task.id
+                        )
+                    ).all()
+                    for bundle_id in bundle_ids:
+                        refresh_bundle_resolution(session, bundle_id, now=now)
+                self._add_profile_change(
+                    session,
+                    row,
+                    event_type="fact_reject",
+                    changed_fields={
+                        "previous_status": before.status.value,
+                        "status": "rejected",
+                    },
+                    impact_scopes=["profile_review"],
+                    source=changed_by,
+                    now=now,
+                    revision=after.version,
                 )
             session.commit()
             return [self._fact_view(session, row) for row, _before, _after in changes]
@@ -560,6 +789,26 @@ class SqlAlchemyProfileGateway:
             impact_scopes_json=json.dumps(impact_scopes, ensure_ascii=False),
             source=source, occurred_at=now,
         ))
+
+    @staticmethod
+    def _display_name(fact: CandidateFact) -> str | None:
+        if fact.field_key == "name":
+            return fact.value
+        if fact.category is not FactCategory.BASIC:
+            return None
+        for line in fact.value.splitlines():
+            match = re.match(r"^\s*(?:姓名|name)\s*[：:]\s*(.+?)\s*$", line, re.IGNORECASE)
+            if match:
+                return match.group(1)[:200]
+        return None
+
+    @staticmethod
+    def _reject_contact_information(*values: str) -> None:
+        if any(contains_contact_information(value) for value in values):
+            raise CareerDomainError(
+                "Contact information cannot be stored as a career fact.",
+                code="contact_information_not_allowed_in_fact",
+            )
 
     @staticmethod
     def _to_domain(row: CandidateFactModel) -> CandidateFact:

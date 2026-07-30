@@ -7,6 +7,7 @@ import json
 from datetime import UTC, datetime
 from time import perf_counter
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from career_console.application.ports.profile_insight import ProfileInsightAnalyzer
 from career_console.domain.common.errors import CareerDomainError
@@ -18,6 +19,59 @@ class ProfileMemoryApplicationService:
         self.analyzer = analyzer
 
     def generate_insights(self) -> list[dict[str, Any]]:
+        items, _reused = self._generate_insights()
+        return items
+
+    def run_due(self, *, now: datetime | None = None) -> dict[str, Any]:
+        """Run the complete daily profile-maintenance workflow in China Standard Time."""
+        started = now or datetime.now(UTC)
+        local = started.astimezone(ZoneInfo("Asia/Shanghai"))
+        digest = self.gateway.generate_daily_digest(day=local.date().isoformat())
+        counters = {
+            "profile_jobs_processed": 1,
+            "profile_digest_generated": 1,
+            "profile_insights_created": 0,
+            "profile_insights_reused": 0,
+            "profile_insight_skipped": 0,
+            "profile_insight_failed": 0,
+            "profile_strategy_processed": 0,
+        }
+        insight_ids: list[str] = []
+        insight_status = "created"
+        try:
+            insights, reused = self._generate_insights()
+            insight_ids = [str(item["id"]) for item in insights]
+            counters["profile_insights_reused" if reused else "profile_insights_created"] = (
+                len(insights)
+            )
+            insight_status = "reused" if reused else "created"
+        except CareerDomainError as exc:
+            if exc.code == "profile_insight_unavailable":
+                counters["profile_insight_skipped"] = 1
+                insight_status = "skipped_unavailable"
+            else:
+                counters["profile_insight_failed"] = 1
+                insight_status = "failed"
+        except ValueError:
+            counters["profile_insight_skipped"] = 1
+            insight_status = "skipped_no_confirmed_facts"
+
+        strategy = None
+        if local.weekday() == 0:
+            strategy = self.gateway.generate_strategy_proposal(now=started)
+            counters["profile_strategy_processed"] = 1
+            counters["profile_jobs_processed"] += 1
+        return {
+            **counters,
+            "digest_id": digest["id"],
+            "insight_ids": insight_ids,
+            "insight_status": insight_status,
+            "strategy_id": strategy["id"] if strategy else None,
+            "business_date": local.date().isoformat(),
+            "business_timezone": "Asia/Shanghai",
+        }
+
+    def _generate_insights(self) -> tuple[list[dict[str, Any]], bool]:
         if self.analyzer is None:
             raise CareerDomainError(
                 "档案洞察 Agent 未配置，请先配置模型提供方。",
@@ -26,6 +80,9 @@ class ProfileMemoryApplicationService:
         context = self.gateway.profile_insight_context()
         encoded = json.dumps(context, ensure_ascii=False, sort_keys=True, default=str)
         input_hash = hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+        existing = self.gateway.existing_profile_insights(input_hash=input_hash)
+        if existing is not None:
+            return existing, True
         started_at = datetime.now(UTC)
         started = perf_counter()
         try:
@@ -63,7 +120,7 @@ class ProfileMemoryApplicationService:
             input_revision=context["inputRevision"],
             output_hash=output_hash,
             audit=self._audit(started_at, started),
-        )
+        ), False
 
     def _audit(self, started_at: datetime, started: float) -> dict[str, Any]:
         provider = getattr(self.analyzer, "provider", None)
@@ -73,6 +130,7 @@ class ProfileMemoryApplicationService:
             "provider": type(provider).__name__ if provider is not None else None,
             "model": getattr(self.analyzer, "model", None),
             "prompt_version": getattr(self.analyzer, "prompt_version", "profile_insight.v1"),
+            "skill_version": getattr(self.analyzer, "skill_version", None),
             "created_at": started_at,
             "duration_ms": max(0, round((perf_counter() - started) * 1000)),
             "input_tokens": usage.get("prompt_tokens") or usage.get("input_tokens"),

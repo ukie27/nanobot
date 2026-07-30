@@ -63,6 +63,12 @@ class ForkResumeRequest(BaseModel):
     direction_label: str | None = Field(default=None, max_length=120)
 
 
+class SetDefaultResumeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    resume_id: str = Field(min_length=1, max_length=36)
+    expected_version: int | None = Field(default=None, ge=1)
+
+
 class MaterialFactSnapshotResponse(BaseModel):
     id: str
     fact_id: str
@@ -172,6 +178,9 @@ class ResumeSeriesResponse(BaseModel):
     direction_label: str | None
     material_count: int
     latest_version: MaterialVersionResponse | None
+    latest_finalized_version: MaterialVersionResponse | None = None
+    is_default: bool = False
+    default_version: int | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -206,6 +215,16 @@ def resolve_agent_material(proposal_id: str, body: ResolveAgentMaterialRequest,
 def list_resumes(request: Request) -> dict:
     items = request.app.state.material_gateway.list_resumes()
     return {"items": items, "total": len(items)}
+
+
+@resume_router.get("/default", response_model=ResumeSeriesResponse | None)
+def get_default_resume(request: Request) -> dict | None:
+    return request.app.state.application_service.get_default_resume()
+
+
+@resume_router.put("/default", response_model=ResumeSeriesResponse)
+def set_default_resume(body: SetDefaultResumeRequest, request: Request) -> dict:
+    return request.app.state.application_service.set_default_resume(**body.model_dump())
 
 
 @resume_router.post("/from-material", status_code=status.HTTP_201_CREATED,
@@ -263,13 +282,9 @@ def review_material(material_id: str, request: Request) -> dict:
 
 @router.post("/{material_id}/finalize", response_model=MaterialResponse)
 def finalize_material(material_id: str, body: FinalizeMaterialRequest, request: Request) -> dict:
-    material = request.app.state.material_service.finalize(
+    return request.app.state.material_service.finalize(
         material_id, expected_version=body.expected_version
     )
-    request.app.state.application_service.mark_job_ready(
-        job_post_id=material["job_post_id"]
-    )
-    return material
 
 
 @export_router.get("/{export_id}/download", response_class=FileResponse)

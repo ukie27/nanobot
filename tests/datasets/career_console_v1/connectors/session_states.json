@@ -1,0 +1,8 @@
+{
+  "states": [
+    {"source": "nowcoder", "status": "authenticated", "canSync": true},
+    {"source": "nowcoder", "status": "expired", "canSync": false},
+    {"source": "boss", "status": "not_authenticated", "canSearch": false},
+    {"source": "boss", "status": "bridge_unavailable", "canSearch": false}
+  ]
+}

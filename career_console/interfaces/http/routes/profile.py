@@ -40,12 +40,12 @@ def list_documents(request: Request) -> DocumentListResponse:
 
 
 @router.post("/documents/import", response_model=DocumentResponse, status_code=201)
-async def import_document(
+def import_document(
     request: Request,
     file: UploadFile = File(...),
 ) -> DocumentResponse:
     limit = request.app.state.settings.max_document_bytes
-    content = await file.read(limit + 1)
+    content = file.file.read(limit + 1)
     result = request.app.state.profile_service.import_file(
         file_name=file.filename or "document",
         content=content,

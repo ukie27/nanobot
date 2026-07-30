@@ -11,6 +11,7 @@ import {
   getBossConnector,
   getNowcoderConnector,
   loginBossConnector,
+  loginNowcoderConnector,
   scanBossConnector,
   scanNowcoderConnector,
 } from "./api";
@@ -42,6 +43,7 @@ const connectorErrors: Record<string, string> = {
   plugin_not_installed: "对应的网站插件尚未安装，请先完成插件安装。",
   execution_failed: "调用 OpenCLI 失败，请检查可执行文件和插件配置。",
   temporary_timeout: "BOSS 登录状态检查超时。该来源可暂时保持关闭，不影响牛客每日招聘。",
+  browser_bridge_unavailable: "浏览器连接不可用，请确认 OpenCLI 浏览器扩展已启用。",
 };
 const triggerLabels: Record<string, string> = {
   manual: "手动",
@@ -63,6 +65,33 @@ function connectorStatusLabel(status?: string, errorCode?: string | null) {
   if (status === "requires_login" || errorCode === "requires_login") return "需要登录";
   if (errorCode === "opencli_not_installed") return "OpenCLI 未配置";
   return "暂不可用";
+}
+
+function SessionSummary({ connector }: {
+  connector?: {
+    session_status: string;
+    session_identity: Record<string, string | boolean | number>;
+    session_checked_at: string | null;
+  };
+}) {
+  const identity = connector?.session_identity ?? {};
+  const label = connector?.session_status === "authenticated"
+    ? "已登录"
+    : connector?.session_status === "requires_login"
+      ? "需要登录"
+      : connector?.session_status === "expired"
+        ? "登录已过期"
+        : connector?.session_status === "unavailable"
+          ? "无法检查"
+          : "尚未检查";
+  const name = identity.display_name ?? identity.nickname ?? identity.username ?? identity.user_type;
+  return <div className="wide cursor-strip connector-session">
+    <span>浏览器会话</span>
+    <strong>{label}{name ? ` · ${String(name)}` : ""}</strong>
+    <small>{connector?.session_checked_at
+      ? `最后检查 ${formatChinaTime(connector.session_checked_at)}（北京时间）`
+      : "保存设置后，打开登录并检查状态。"}</small>
+  </div>;
 }
 
 function connectorHealthMessage(source: string, data: {
@@ -127,20 +156,21 @@ export function DataSourcesPage({ setupOnly = false }: { setupOnly?: boolean }) 
   };
   const saveNowcoder = useMutation({ mutationFn: configureNowcoderConnector, onSuccess: async () => { setMessage("牛客数据源设置已保存。"); await refreshNowcoder(); } });
   const healthNowcoder = useMutation({ mutationFn: checkNowcoderConnector, onSuccess: async (data) => { setMessage(connectorHealthMessage("牛客", data)); await refreshNowcoder(); } });
+  const loginNowcoder = useMutation({ mutationFn: loginNowcoderConnector, onSuccess: async () => { setMessage("牛客登录已确认。"); await refreshNowcoder(); } });
   const scanNowcoder = useMutation({ mutationFn: scanNowcoderConnector, onSuccess: async (run) => { setMessage(`牛客同步完成：发现 ${run.discovered_count}，新增 ${run.created_count}，更新 ${run.updated_count}，重复 ${run.duplicate_count}。`); await refreshNowcoder(); } });
-  const error = save.error || health.error || login.error || scan.error || saveNowcoder.error || healthNowcoder.error || scanNowcoder.error;
+  const error = save.error || health.error || login.error || scan.error || saveNowcoder.error || healthNowcoder.error || loginNowcoder.error || scanNowcoder.error;
   const submit = (event: FormEvent) => { event.preventDefault(); save.mutate(form); };
   const nowcoderScanBlocked = !nowcoderForm.enabled
     ? "请先启用牛客来源并保存设置。"
-    : nowcoder.data?.health_status !== "healthy"
-      ? "请先完成牛客来源测试，确认 OpenCLI、插件和登录状态正常。"
+    : nowcoder.data?.session_status !== "authenticated"
+      ? "请先打开牛客登录并检查状态。"
       : "";
   const bossScanBlocked = !form.enabled
     ? "请先启用 BOSS 来源并保存设置。"
     : !form.search_query.trim()
       ? "请先填写要搜索的岗位关键词。"
-      : query.data?.health_status !== "healthy"
-        ? "请先检查环境与登录，确认来源可用。"
+      : query.data?.session_status !== "authenticated"
+        ? "请先打开 BOSS 登录并检查状态。"
         : "";
 
   return <>
@@ -156,7 +186,8 @@ export function DataSourcesPage({ setupOnly = false }: { setupOnly?: boolean }) 
         <label><span>公司关键词（可选）</span><input value={nowcoderForm.search_query} placeholder="留空表示全部" onChange={e => setNowcoderForm({ ...nowcoderForm, search_query: e.target.value })} /></label>
         <label><span>每次最多条数</span><input type="number" min="1" max="1000" value={nowcoderForm.result_limit} onChange={e => setNowcoderForm({ ...nowcoderForm, result_limit: Number(e.target.value) })} /></label>
         <label><span>每日 09:00 自动获取当天</span><input type="checkbox" checked={nowcoderForm.schedule_enabled} onChange={e => setNowcoderForm({ ...nowcoderForm, schedule_enabled: e.target.checked })} /></label>
-        <div className="form-actions wide"><button type="submit" disabled={saveNowcoder.isPending}>{saveNowcoder.isPending ? "正在保存…" : "保存牛客设置"}</button><button type="button" className="secondary" onClick={() => healthNowcoder.mutate()} disabled={healthNowcoder.isPending}>{healthNowcoder.isPending ? "正在测试…" : "测试牛客来源"}</button></div>
+        <SessionSummary connector={nowcoder.data} />
+        <div className="form-actions wide"><button type="submit" disabled={saveNowcoder.isPending}>{saveNowcoder.isPending ? "正在保存…" : "保存牛客设置"}</button><button type="button" className="secondary" onClick={() => loginNowcoder.mutate()} disabled={loginNowcoder.isPending}>{loginNowcoder.isPending ? "正在打开…" : "打开登录"}</button><button type="button" className="secondary" onClick={() => healthNowcoder.mutate()} disabled={healthNowcoder.isPending}>{healthNowcoder.isPending ? "正在检查…" : "检查登录状态"}</button></div>
       </form>
       {!setupOnly && <div className="form-actions">
         <label><span>手动获取范围</span><select value={lookback} onChange={e => setLookback(Number(e.target.value) as 0 | 7 | 14 | 30)}><option value={0}>仅今天</option><option value={7}>最近 7 天</option><option value={14}>最近 14 天</option><option value={30}>最近 30 天</option></select></label>
@@ -174,6 +205,7 @@ export function DataSourcesPage({ setupOnly = false }: { setupOnly?: boolean }) 
         <label><span>城市</span><input value={form.city} onChange={e => setForm({ ...form, city: e.target.value })} /></label>
         <label><span>每次岗位数</span><input type="number" min="1" max="50" value={form.result_limit} onChange={e => setForm({ ...form, result_limit: Number(e.target.value) })} /></label>
         <div className="wide cursor-strip"><span>BOSS 使用方式</span><strong>仅手动定向搜索；每日自动信息获取由牛客承担</strong></div>
+        <SessionSummary connector={query.data} />
         <div className="form-actions"><button type="submit" disabled={save.isPending}>{save.isPending ? "正在保存…" : "保存 BOSS 设置"}</button><button type="button" className="secondary" onClick={() => health.mutate()} disabled={health.isPending}>{health.isPending ? "正在测试…" : "测试环境与登录"}</button><button type="button" className="secondary" onClick={() => login.mutate()} disabled={login.isPending}>{login.isPending ? "正在打开…" : "打开登录"}</button>{!setupOnly && <button type="button" onClick={() => scan.mutate()} disabled={scan.isPending || Boolean(bossScanBlocked)}>{scan.isPending ? "正在搜索…" : "立即搜索"}</button>}</div>
         {health.isPending && <p className="disabled-reason wide">正在检查 OpenCLI 与浏览器登录状态，最多等待 15 秒。</p>}
       </form>

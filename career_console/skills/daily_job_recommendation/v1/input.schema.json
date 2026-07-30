@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "daily_job_recommendation_context.v1",
+  "type": "object",
+  "required": [
+    "schemaVersion", "businessTimezone", "inputRevision", "job", "requirements",
+    "confirmedFacts", "confirmedPreferences", "confirmedInsights", "manualDirections",
+    "factSetHash", "preferenceSetHash"
+  ],
+  "additionalProperties": false
+}

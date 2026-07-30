@@ -36,6 +36,7 @@ from career_console.infrastructure.database.models import (
     MaterialDraftModel,
     MaterialExportModel,
     MaterialReviewModel,
+    ResumeDefaultModel,
     ResumeModel,
     ResumeVersionModel,
     ReviewFindingModel,
@@ -194,6 +195,7 @@ class SqlAlchemyMaterialGateway:
 
     def list_resumes(self) -> list[dict[str, Any]]:
         with self._session_factory() as session:
+            default = session.scalar(select(ResumeDefaultModel))
             rows = session.execute(
                 select(ResumeModel, func.count(MaterialDraftModel.id))
                 .outerjoin(MaterialDraftModel, MaterialDraftModel.resume_id == ResumeModel.id)
@@ -209,6 +211,15 @@ class SqlAlchemyMaterialGateway:
                     "direction_label": resume.direction_label,
                     "material_count": material_count,
                     "latest_version": self._resume_series_version_summary(session, resume.id),
+                    "latest_finalized_version": self._resume_series_version_summary(
+                        session, resume.id, finalized_only=True
+                    ),
+                    "is_default": default is not None and default.resume_id == resume.id,
+                    "default_version": (
+                        default.version
+                        if default is not None and default.resume_id == resume.id
+                        else None
+                    ),
                     "created_at": self._utc(resume.created_at),
                     "updated_at": self._utc(resume.updated_at),
                 }
@@ -916,9 +927,22 @@ class SqlAlchemyMaterialGateway:
         return version
 
     def _resume_series_version_summary(
-        self, session: Session, resume_id: str
+        self, session: Session, resume_id: str, *, finalized_only: bool = False
     ) -> dict[str, Any] | None:
-        version = self._latest_resume_series_version(session, resume_id)
+        if finalized_only:
+            version = session.scalar(
+                select(ResumeVersionModel)
+                .where(
+                    ResumeVersionModel.resume_id == resume_id,
+                    ResumeVersionModel.status == VersionStatus.FINAL.value,
+                )
+                .order_by(
+                    ResumeVersionModel.finalized_at.desc(),
+                    ResumeVersionModel.version_number.desc(),
+                )
+            )
+        else:
+            version = self._latest_resume_series_version(session, resume_id)
         return None if version is None else self._version_summary(version)
 
     def _resume_view(
@@ -929,6 +953,7 @@ class SqlAlchemyMaterialGateway:
                 MaterialDraftModel.resume_id == resume.id
             )
         )
+        default = session.scalar(select(ResumeDefaultModel))
         return {
             "id": resume.id,
             "name": resume.name,
@@ -937,6 +962,15 @@ class SqlAlchemyMaterialGateway:
             "direction_label": resume.direction_label,
             "material_count": material_count,
             "latest_version": self._version_summary(version),
+            "latest_finalized_version": self._resume_series_version_summary(
+                session, resume.id, finalized_only=True
+            ),
+            "is_default": default is not None and default.resume_id == resume.id,
+            "default_version": (
+                default.version
+                if default is not None and default.resume_id == resume.id
+                else None
+            ),
             "created_at": self._utc(resume.created_at),
             "updated_at": self._utc(resume.updated_at),
         }

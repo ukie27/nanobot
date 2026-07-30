@@ -1,0 +1,14 @@
+{
+  "multiActionMail": {
+    "topLevelBundleCount": 1,
+    "items": ["event", "schedule", "attention"],
+    "requiresUserConfirmation": true
+  },
+  "unrelatedNewsletter": {
+    "analyzed": false,
+    "bodyRetained": false
+  },
+  "lookbackDaysMaximum": 30,
+  "includeReadAndUnread": true,
+  "timezone": "Asia/Shanghai"
+}

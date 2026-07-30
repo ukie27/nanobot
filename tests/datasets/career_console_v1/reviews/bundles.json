@@ -1,0 +1,15 @@
+{
+  "bundles": [
+    {
+      "id": "bundle-profile-project",
+      "type": "profile_section",
+      "section": "project",
+      "itemCount": 4
+    },
+    {
+      "id": "bundle-mail-multi-action",
+      "type": "mail_analysis",
+      "itemCount": 3
+    }
+  ]
+}

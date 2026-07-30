@@ -1,0 +1,12 @@
+{
+  "schemaVersion": "candidate_profile_object.v2",
+  "expectedSections": ["basic", "education", "project", "skill"],
+  "expectedProjectCount": 2,
+  "conflicts": [
+    {
+      "fieldKey": "education.graduation_date",
+      "values": ["2027-06", "2026-06"],
+      "requiresUserConfirmation": true
+    }
+  ]
+}

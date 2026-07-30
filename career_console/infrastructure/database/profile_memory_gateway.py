@@ -15,6 +15,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 from career_console.infrastructure.database.models import (
+    AgentRunModel,
     ApplicationEventModel,
     ApplicationModel,
     CandidateFactModel,
@@ -73,6 +74,7 @@ class SqlAlchemyProfileMemoryGateway:
             }
 
     def run_due(self) -> dict[str, Any]:
+        """Legacy gateway-only maintenance retained for adapter compatibility."""
         digest = self.generate_daily_digest()
         strategy = None
         if datetime.now(ZoneInfo("Asia/Shanghai")).weekday() == 0:
@@ -184,8 +186,8 @@ class SqlAlchemyProfileMemoryGateway:
                 raise RuntimeError("Daily digest upsert did not produce a row.")
             return self._digest_view(row)
 
-    def generate_strategy_proposal(self) -> dict[str, Any]:
-        now = datetime.now(UTC)
+    def generate_strategy_proposal(self, *, now: datetime | None = None) -> dict[str, Any]:
+        now = now or datetime.now(UTC)
         period_start = now - timedelta(days=7)
         with self._session_factory() as session:
             self._ensure_profile(session, now)
@@ -320,6 +322,27 @@ class SqlAlchemyProfileMemoryGateway:
                 },
             }
 
+    def existing_profile_insights(self, *, input_hash: str) -> list[dict[str, Any]] | None:
+        """Return a completed result for the same trusted input, including an empty result."""
+        with self._session_factory() as session:
+            run = session.scalar(
+                select(AgentRunModel)
+                .where(
+                    AgentRunModel.task_type == "profile_insight",
+                    AgentRunModel.input_hash == input_hash,
+                    AgentRunModel.status == "succeeded",
+                )
+                .order_by(AgentRunModel.created_at.desc())
+            )
+            if run is None:
+                return None
+            rows = session.scalars(
+                select(ProfileInsightProposalModel)
+                .where(ProfileInsightProposalModel.agent_run_id == run.id)
+                .order_by(ProfileInsightProposalModel.created_at)
+            ).all()
+            return [self._insight_view(session, row) for row in rows]
+
     def save_profile_insights(self, *, result: Any, input_hash: str, input_revision: str,
                               output_hash: str, audit: dict[str, Any]) -> list[dict[str, Any]]:
         now = datetime.now(UTC)
@@ -330,7 +353,9 @@ class SqlAlchemyProfileMemoryGateway:
                 output_count=len(result.insights), error_code=None,
                 created_at=audit["created_at"], finished_at=now,
                 provider=audit.get("provider"), model=audit.get("model"),
-                prompt_version=audit.get("prompt_version"), input_entity_type="candidate_profile",
+                prompt_version=audit.get("prompt_version"),
+                skill_version=audit.get("skill_version"),
+                input_entity_type="candidate_profile",
                 input_entity_id=PROFILE_ID, input_revision=input_revision, input_hash=input_hash,
                 output_hash=output_hash, input_tokens=audit.get("input_tokens"),
                 output_tokens=audit.get("output_tokens"), duration_ms=audit.get("duration_ms"),
@@ -367,7 +392,9 @@ class SqlAlchemyProfileMemoryGateway:
                 schema_version="profile_insight.v1", status="failed", output_count=0,
                 error_code=error_code, created_at=audit["created_at"], finished_at=now,
                 provider=audit.get("provider"), model=audit.get("model"),
-                prompt_version=audit.get("prompt_version"), input_entity_type="candidate_profile",
+                prompt_version=audit.get("prompt_version"),
+                skill_version=audit.get("skill_version"),
+                input_entity_type="candidate_profile",
                 input_entity_id=PROFILE_ID, input_revision=input_revision, input_hash=input_hash,
                 input_tokens=audit.get("input_tokens"), output_tokens=audit.get("output_tokens"),
                 duration_ms=audit.get("duration_ms"), retry_count=audit.get("retry_count", 0),

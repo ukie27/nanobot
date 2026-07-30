@@ -15,6 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from career_console import __version__
+from career_console.application.ports import FactExtractor
 from career_console.application.services import (
     CareerApplicationService,
     ConnectorApplicationService,
@@ -22,6 +23,7 @@ from career_console.application.services import (
     InterviewApplicationService,
     JobApplicationService,
     JobFitApplicationService,
+    JobRecommendationApplicationService,
     MailApplicationService,
     MaterialAgentApplicationService,
     MaterialApplicationService,
@@ -85,20 +87,21 @@ from career_console.infrastructure.database.profile_impact_gateway import (
 from career_console.infrastructure.database.profile_memory_gateway import (
     SqlAlchemyProfileMemoryGateway,
 )
+from career_console.infrastructure.database.recommendation_gateway import (
+    SqlAlchemyRecommendationGateway,
+)
 from career_console.infrastructure.database.resume_direction_gateway import (
     SqlAlchemyResumeDirectionGateway,
 )
 from career_console.infrastructure.database.runtime_gateway import SqlAlchemyRuntimeGateway
 from career_console.infrastructure.database.task_gateway import SqlAlchemyTaskGateway
-from career_console.infrastructure.extraction import (
-    LocalJobExtractor,
-    LocalResumeFactExtractor,
-)
+from career_console.infrastructure.extraction import LocalJobExtractor
 from career_console.infrastructure.files import (
     DocumentParser,
     LocalBlobStore,
     SafeJobPageFetcher,
 )
+from career_console.infrastructure.jd_discovery import SafeHtmlJobDescriptionDiscovery
 from career_console.infrastructure.jobs import BackgroundJobService
 from career_console.infrastructure.mail import StdlibReadOnlyImapClient
 from career_console.infrastructure.materials import VerifiedPdfExporter
@@ -130,6 +133,7 @@ from career_console.interfaces.http.routes import (
     opportunities,
     profile,
     profile_memory,
+    recommendations,
     runtime,
     system,
     tasks,
@@ -138,7 +142,11 @@ from career_console.interfaces.http.routes import (
 from career_console.interfaces.http.routes.system import restart_current_process
 
 
-def create_app(settings: CareerSettings | None = None) -> FastAPI:
+def create_app(
+    settings: CareerSettings | None = None,
+    *,
+    fact_extractor: FactExtractor | None = None,
+) -> FastAPI:
     settings = settings or CareerSettings()
     settings = apply_stored_runtime_configuration(settings)
     browser_session_token = secrets.token_urlsafe(32)
@@ -173,7 +181,7 @@ def create_app(settings: CareerSettings | None = None) -> FastAPI:
             gateway=SqlAlchemyProfileGateway(database.session_factory),
             parser=DocumentParser(max_bytes=settings.max_document_bytes),
             blob_store=LocalBlobStore(settings.blobs_dir),
-            extractor=_create_fact_extractor(settings, agent_runtime),
+            extractor=fact_extractor or _create_fact_extractor(agent_runtime),
         )
         job_gateway = SqlAlchemyJobGateway(database.session_factory)
         job_service = JobApplicationService(
@@ -184,6 +192,10 @@ def create_app(settings: CareerSettings | None = None) -> FastAPI:
         job_fit_service = JobFitApplicationService(
             SqlAlchemyJobFitGateway(database.session_factory),
             _create_job_fit_analyzer(settings, agent_runtime),
+        )
+        recommendation_service = JobRecommendationApplicationService(
+            SqlAlchemyRecommendationGateway(database.session_factory),
+            _create_job_recommendation_analyzer(agent_runtime),
         )
         resume_direction_service = ResumeDirectionApplicationService(
             SqlAlchemyResumeDirectionGateway(database.session_factory),
@@ -216,6 +228,11 @@ def create_app(settings: CareerSettings | None = None) -> FastAPI:
             gateway=connector_gateway,
             runner=connector_service.runner,
             opportunities=opportunity_gateway,
+            jobs=job_service,
+            jd_discovery=SafeHtmlJobDescriptionDiscovery(
+                SafeJobPageFetcher(max_bytes=settings.max_document_bytes)
+            ),
+            recommendations=recommendation_service,
         )
         connector_gateway.get_or_create_nowcoder()
         mail_gateway = SqlAlchemyMailGateway(database.session_factory)
@@ -229,6 +246,7 @@ def create_app(settings: CareerSettings | None = None) -> FastAPI:
             analyzer=_create_mail_analyzer(settings, agent_runtime),
             secret_reference=imap_secret_reference,
         )
+        mail_service.configure_reconciliation(job_posts=job_gateway)
         integration_configuration = IntegrationConfigurationService(
             configuration=configuration_service,
             connector_service=connector_service,
@@ -266,7 +284,7 @@ def create_app(settings: CareerSettings | None = None) -> FastAPI:
             connector_service=connector_service,
             nowcoder_service=nowcoder_connector_service,
             mail_service=mail_service,
-            profile_memory=profile_memory_gateway,
+            profile_memory=profile_memory_service,
             profile_impacts=profile_impact_service,
             channels=channel_configuration,
         )
@@ -304,6 +322,7 @@ def create_app(settings: CareerSettings | None = None) -> FastAPI:
         app.state.job_gateway = job_gateway
         app.state.job_service = job_service
         app.state.job_fit_service = job_fit_service
+        app.state.recommendation_service = recommendation_service
         app.state.resume_direction_service = resume_direction_service
         app.state.job_fetcher = SafeJobPageFetcher(max_bytes=settings.max_document_bytes)
         app.state.material_gateway = material_gateway
@@ -326,7 +345,11 @@ def create_app(settings: CareerSettings | None = None) -> FastAPI:
         app.state.governance_gateway = governance_gateway
         app.state.governance_service = GovernanceApplicationService(governance_gateway)
         app.state.runtime_gateway = runtime_gateway
-        app.state.runtime_service = RuntimeApplicationService(runtime_gateway)
+        app.state.runtime_service = RuntimeApplicationService(
+            runtime_gateway,
+            profile=profile_service,
+            mail=mail_service,
+        )
         app.state.profile_memory_gateway = profile_memory_gateway
         app.state.profile_memory_service = profile_memory_service
         app.state.profile_impact_service = profile_impact_service
@@ -403,6 +426,7 @@ def create_app(settings: CareerSettings | None = None) -> FastAPI:
     app.include_router(profile_memory.router)
     app.include_router(job_pool.router)
     app.include_router(opportunities.router)
+    app.include_router(recommendations.router)
     app.include_router(materials.router)
     app.include_router(materials.resume_router)
     app.include_router(materials.export_router)
@@ -447,15 +471,12 @@ def create_app(settings: CareerSettings | None = None) -> FastAPI:
     return app
 
 
-def _create_fact_extractor(settings: CareerSettings, runtime: CareerAgentRuntime):
-    if settings.fact_extractor_mode == "local":
-        return LocalResumeFactExtractor()
+def _create_fact_extractor(runtime: CareerAgentRuntime) -> FactExtractor:
+    from career_console.infrastructure.agents import RuntimeConfiguredProfileFactExtractor
 
-    from career_console.infrastructure.agents import CareerProfileFactExtractor
-    resolved = runtime.resolve("fact_extraction")
-    if resolved is None:
-        return LocalResumeFactExtractor()
-    return CareerProfileFactExtractor(resolved.provider, model=resolved.model)
+    return RuntimeConfiguredProfileFactExtractor(
+        lambda: runtime.resolve("fact_extraction")
+    )
 
 
 def _create_mail_analyzer(settings: CareerSettings, runtime: CareerAgentRuntime):
@@ -497,6 +518,20 @@ def _create_job_fit_analyzer(settings: CareerSettings, runtime: CareerAgentRunti
         return (
             CareerJobFitAnalyzer(resolved.provider, model=resolved.model)
             if resolved else None
+        )
+    except (RuntimeError, ValueError):
+        return None
+
+
+def _create_job_recommendation_analyzer(runtime: CareerAgentRuntime):
+    try:
+        from career_console.infrastructure.agents import CareerJobRecommendationAnalyzer
+
+        resolved = runtime.resolve("daily_job_recommendation")
+        return (
+            CareerJobRecommendationAnalyzer(resolved.provider, model=resolved.model)
+            if resolved
+            else None
         )
     except (RuntimeError, ValueError):
         return None

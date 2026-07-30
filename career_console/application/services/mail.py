@@ -5,12 +5,15 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, time, timedelta
 from time import perf_counter
 from typing import Any
 from zoneinfo import ZoneInfo
 
 from career_console.application.ports.imap_client import ImapReadOnlyError
+from career_console.application.services.mail_reconciliation import (
+    MailApplicationReconciliationService,
+)
 from career_console.domain.applications import ApplicationStatus
 from career_console.domain.common.errors import CareerDomainError
 
@@ -30,6 +33,15 @@ class MailApplicationService:
         self.jobs = jobs
         self.analyzer = analyzer
         self.secret_reference = secret_reference
+        self.reconciliation = None
+
+    def configure_reconciliation(self, *, job_posts) -> None:
+        self.reconciliation = MailApplicationReconciliationService(
+            gateway=self.gateway,
+            applications=self.applications,
+            job_posts=job_posts,
+            tasks=self.tasks,
+        )
 
     def get(self) -> dict[str, Any]:
         state = self.gateway.get()
@@ -94,7 +106,7 @@ class MailApplicationService:
                 code="mail_intelligence_unavailable",
             )
         if message.get("intelligence") is not None:
-            return message["intelligence"]
+            return self._reconcile(message, message["intelligence"])
         if not message["body_fetched"]:
             raise CareerDomainError(
                 "该邮件只有 Header，缺少可供 Agent 核验的正文证据。",
@@ -113,11 +125,19 @@ class MailApplicationService:
             )
             raise
         output_json = result.model_dump_json(by_alias=True)
-        return self.gateway.save_analysis(
+        analysis = self.gateway.save_analysis(
             message_id=message_id, result=result, input_hash=input_hash,
             output_hash=hashlib.sha256(output_json.encode("utf-8")).hexdigest(),
             audit=self._analysis_audit(started_at, started),
         )
+        return self._reconcile(message, analysis)
+
+    def _reconcile(
+        self, message: dict[str, Any], analysis: dict[str, Any]
+    ) -> dict[str, Any]:
+        if self.reconciliation is None:
+            return analysis
+        return self.reconciliation.reconcile(message=message, analysis=analysis)
 
     def resolve_intelligence_item(
         self, *, item_id: str, expected_version: int, resolution: str, reason: str
@@ -146,8 +166,20 @@ class MailApplicationService:
             elif item["item_type"] == "schedule" and self.tasks is not None:
                 self.tasks.create_task(
                     title=item["title"], task_type=item["category"],
-                    due_at=item["scheduled_at"], timezone="Asia/Shanghai",
+                    due_at=item["scheduled_at"] or self._default_attention_due(),
+                    timezone="Asia/Shanghai",
                     notes=f"{item['details']}\n证据：{item['evidence']}", priority=40,
+                    application_id=application_id,
+                    source_key=f"mail-intelligence:{item_id}",
+                )
+            elif item["item_type"] == "attention" and self.tasks is not None:
+                self.tasks.create_task(
+                    title=item["title"],
+                    task_type=item["category"] or "mail_attention",
+                    due_at=item["scheduled_at"] or self._default_attention_due(),
+                    timezone="Asia/Shanghai",
+                    notes=f"{item['details']}\n证据：{item['evidence']}",
+                    priority=50 if item.get("severity") == "high" else 40,
                     application_id=application_id,
                     source_key=f"mail-intelligence:{item_id}",
                 )
@@ -362,6 +394,12 @@ class MailApplicationService:
         return message["sent_at"] or datetime.now(UTC)
 
     @staticmethod
+    def _default_attention_due() -> datetime:
+        china = ZoneInfo("Asia/Shanghai")
+        tomorrow = datetime.now(china).date() + timedelta(days=1)
+        return datetime.combine(tomorrow, time(hour=10), tzinfo=china)
+
+    @staticmethod
     def _analysis_input_hash(message: dict[str, Any], applications: list[dict[str, Any]]) -> str:
         payload = {
             "id": message["id"], "uid": message["uid"], "sender": message["sender"],
@@ -383,6 +421,7 @@ class MailApplicationService:
             "provider": type(provider).__name__ if provider is not None else None,
             "model": getattr(self.analyzer, "model", None),
             "prompt_version": getattr(self.analyzer, "prompt_version", "mail_intelligence.v1"),
+            "skill_version": getattr(self.analyzer, "skill_version", None),
             "created_at": started_at,
             "duration_ms": max(0, round((perf_counter() - started) * 1000)),
             "input_tokens": usage.get("prompt_tokens") or usage.get("input_tokens"),

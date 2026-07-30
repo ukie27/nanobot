@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "daily_job_recommendation.v1",
+  "type": "object",
+  "required": [
+    "schemaVersion", "decision", "score", "priority", "summary", "matchedDirections",
+    "strengths", "gaps", "hardGateFailures", "preferenceReasons", "actionSuggestion",
+    "assessments"
+  ],
+  "additionalProperties": false
+}

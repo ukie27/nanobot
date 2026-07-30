@@ -119,6 +119,7 @@ class MaterialAgentApplicationService:
                 "provider": type(provider).__name__ if provider is not None else None,
                 "model": getattr(agent, "model", None),
                 "prompt_version": getattr(agent, "prompt_version", None),
+                "skill_version": getattr(agent, "skill_version", None),
                 "created_at": started_at,
                 "duration_ms": max(0, round((perf_counter() - started) * 1000)),
                 "input_tokens": usage.get("prompt_tokens") or usage.get("input_tokens"),

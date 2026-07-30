@@ -1,54 +1,123 @@
 from __future__ import annotations
 
+import asyncio
 from io import BytesIO
 from pathlib import Path
 
+import pytest
 from alembic import command
 from docx import Document
 from fastapi.testclient import TestClient
 from pypdf import PdfWriter
 from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
 
+from career_console.application.ports.fact_extractor import ExtractedFact
+from career_console.domain.profile.entities import FactCategory
 from career_console.infrastructure.database.backup import database_revision
 from career_console.infrastructure.database.migrations import alembic_config
+from career_console.infrastructure.extraction import LocalResumeFactExtractor
 from career_console.infrastructure.files.document_parser import DocumentParser
 from career_console.infrastructure.settings import CareerSettings
 from career_console.interfaces.http import create_app
+
+
+def _test_app(settings: CareerSettings):
+    return create_app(settings, fact_extractor=LocalResumeFactExtractor())
+
+
+class _AsyncioRunFactExtractor:
+    name = "asyncio_run_profile_fact_extractor"
+    schema_version = "candidate_profile_object.v2"
+
+    def extract(self, *, document_id: str, text: str) -> list[ExtractedFact]:
+        del document_id
+        return asyncio.run(self._extract(text))
+
+    async def _extract(self, text: str) -> list[ExtractedFact]:
+        await asyncio.sleep(0)
+        evidence = text.strip()
+        return [
+            ExtractedFact(
+                category=FactCategory.SKILL,
+                field_key="skill_profile",
+                title="技能概况",
+                value=evidence,
+                evidence_text=evidence,
+                evidence_texts=(evidence,),
+                confidence=0.9,
+            )
+        ]
+
+
+@pytest.mark.parametrize("import_kind", ["file", "text"])
+def test_import_routes_support_extractors_backed_by_asyncio_run(
+    tmp_path: Path,
+    import_kind: str,
+) -> None:
+    settings = CareerSettings(data_dir=tmp_path / import_kind)
+    app = create_app(settings, fact_extractor=_AsyncioRunFactExtractor())
+
+    with TestClient(app) as client:
+        if import_kind == "file":
+            response = client.post(
+                "/api/v1/documents/import",
+                files={"file": ("resume.txt", b"Skills: Python", "text/plain")},
+            )
+        else:
+            response = client.post(
+                "/api/v1/documents/import-text",
+                json={"name": "resume", "text": "Skills: Python"},
+            )
+
+    assert response.status_code == 201, response.text
+    assert response.json()["proposed_fact_count"] == 1
 
 
 def test_import_review_edit_and_confirmed_query(tmp_path: Path) -> None:
     settings = CareerSettings(data_dir=tmp_path / "career")
     resume = """姓名：张三
 邮箱：zhangsan@example.com
+手机：138 0013 8000
 目标岗位：Python 后端工程师
 专业技能
 - Python, FastAPI, SQLite
 项目经历
 - 求职助手：负责后端开发，将响应时间降低 30%
 """
-    with TestClient(create_app(settings)) as client:
+    with TestClient(_test_app(settings)) as client:
         imported = client.post(
             "/api/v1/documents/import-text", json={"name": "我的简历", "text": resume}
         )
         assert imported.status_code == 201, imported.text
-        assert imported.json()["proposed_fact_count"] >= 6
+        assert imported.json()["proposed_fact_count"] == 4
 
         facts = client.get("/api/v1/facts", params={"status": "proposed"}).json()["items"]
         assert facts
         assert all(item["status"] == "proposed" for item in facts)
-        name = next(item for item in facts if item["field_key"] == "name")
-        assert name["sources"][0]["evidence_text"] == "姓名：张三"
+        name = next(item for item in facts if item["field_key"] == "profile_summary")
+        assert "姓名：张三" in name["sources"][0]["evidence_text"]
+        skill = next(item for item in facts if item["field_key"] == "skill_profile")
+        assert "Python, FastAPI, SQLite" in skill["value"]
+        assert not any(item["value"] in {"Python", "FastAPI", "SQLite"} for item in facts)
+        assert all("zhangsan@example.com" not in item["value"] for item in facts)
+        assert all("138 0013 8000" not in item["value"] for item in facts)
+        assert all(
+            "zhangsan@example.com" not in source["evidence_text"]
+            and "138 0013 8000" not in source["evidence_text"]
+            for item in facts
+            for source in item["sources"]
+        )
 
         edited = client.post(
             f"/api/v1/facts/{name['id']}/edit",
             json={
                 "expected_version": name["version"],
-                "value": "张三（英文名 San Zhang）",
+                "value": "姓名：张三（英文名 San Zhang）",
                 "reason": "补充英文名",
             },
         )
         assert edited.status_code == 200
-        assert edited.json()["revisions"][0]["previous_value"] == "张三"
+        assert edited.json()["revisions"][0]["previous_value"].startswith("姓名：张三")
 
         confirmed = client.post(
             f"/api/v1/facts/{name['id']}/confirm",
@@ -65,10 +134,28 @@ def test_import_review_edit_and_confirmed_query(tmp_path: Path) -> None:
         assert [item["id"] for item in confirmed_facts] == [name["id"]]
 
 
+def test_manual_fact_rejects_contact_information(tmp_path: Path) -> None:
+    settings = CareerSettings(data_dir=tmp_path / "workspace")
+    with TestClient(_test_app(settings)) as client:
+        response = client.post(
+            "/api/v1/facts",
+            json={
+                "category": "basic",
+                "field_key": "profile_summary",
+                "value": "姓名：张三\n邮箱：zhangsan@example.com",
+                "source_note": "用户手工补充",
+            },
+        )
+        assert response.status_code == 422
+        assert response.json()["type"].endswith(
+            "/contact_information_not_allowed_in_fact"
+        )
+
+
 def test_duplicate_import_does_not_duplicate_facts(tmp_path: Path) -> None:
     settings = CareerSettings(data_dir=tmp_path / "career")
     body = {"name": "resume", "text": "姓名：李四\n技能：Python, SQL"}
-    with TestClient(create_app(settings)) as client:
+    with TestClient(_test_app(settings)) as client:
         first = client.post("/api/v1/documents/import-text", json=body)
         second = client.post("/api/v1/documents/import-text", json=body)
         facts = client.get("/api/v1/facts").json()
@@ -80,9 +167,26 @@ def test_duplicate_import_does_not_duplicate_facts(tmp_path: Path) -> None:
     assert facts["total"] == first.json()["proposed_fact_count"]
 
 
-def test_reject_manual_fact_and_version_conflict(tmp_path: Path) -> None:
+def test_import_requires_configured_profile_agent(tmp_path: Path) -> None:
     settings = CareerSettings(data_dir=tmp_path / "career")
     with TestClient(create_app(settings)) as client:
+        response = client.post(
+            "/api/v1/documents/import-text",
+            json={"name": "resume", "text": "技能：Python"},
+        )
+        runs = client.get("/api/v1/runtime/agent-runs").json()["items"]
+
+    assert response.status_code == 422
+    assert response.json()["code"] == "profile_fact_extraction_unavailable"
+    assert "设置 > AI 服务" in response.json()["detail"]
+    assert len(runs) == 1
+    assert runs[0]["status"] == "failed"
+    assert runs[0]["implementation"] == "career_console_profile_fact_extractor"
+
+
+def test_reject_manual_fact_and_version_conflict(tmp_path: Path) -> None:
+    settings = CareerSettings(data_dir=tmp_path / "career")
+    with TestClient(_test_app(settings)) as client:
         created = client.post(
             "/api/v1/facts",
             json={
@@ -143,7 +247,7 @@ def test_docx_and_markdown_parsing(tmp_path: Path) -> None:
 
 def test_unsafe_filename_oversize_and_prompt_injection_are_data(tmp_path: Path) -> None:
     settings = CareerSettings(data_dir=tmp_path / "career", max_document_bytes=1024)
-    with TestClient(create_app(settings)) as client:
+    with TestClient(_test_app(settings)) as client:
         unsafe = client.post(
             "/api/v1/documents/import",
             files={"file": ("../resume.txt", b"name: test", "text/plain")},
@@ -170,10 +274,13 @@ def test_unsafe_filename_oversize_and_prompt_injection_are_data(tmp_path: Path) 
 
 def test_batch_confirm_is_atomic_on_version_conflict(tmp_path: Path) -> None:
     settings = CareerSettings(data_dir=tmp_path / "career")
-    with TestClient(create_app(settings)) as client:
+    with TestClient(_test_app(settings)) as client:
         client.post(
             "/api/v1/documents/import-text",
-            json={"name": "resume", "text": "技能：Python, FastAPI"},
+            json={
+                "name": "resume",
+                "text": "技能：Python, FastAPI\n\n项目经历\n求职助手：负责后端开发",
+            },
         )
         facts = client.get("/api/v1/facts", params={"status": "proposed"}).json()["items"]
         response = client.post(
@@ -195,8 +302,8 @@ def test_automatic_upgrade_backs_up_part0_database(tmp_path: Path) -> None:
     settings.ensure_directories()
     command.upgrade(alembic_config(settings), "20260723_0001")
     assert database_revision(settings.database_path) == "20260723_0001"
-    with TestClient(create_app(settings)) as client:
+    with TestClient(_test_app(settings)) as client:
         assert client.get("/health/ready").status_code == 200
-    backups = list(settings.backups_dir.glob("career-*-pre-202607280028.sqlite3"))
+    backups = list(settings.backups_dir.glob("career-*-pre-202607290031.sqlite3"))
     assert len(backups) == 1
     assert database_revision(backups[0]) == "20260723_0001"

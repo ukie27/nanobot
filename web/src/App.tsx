@@ -9,14 +9,15 @@ import { InterviewCenterPage, InterviewDetailPage } from "./InterviewPages";
 import { MaterialDetailPage, MaterialsPage, ResumeDiffPage } from "./MaterialPages";
 import { MessageCenterPage } from "./MailPages";
 import { OpportunityPage } from "./OpportunityPages";
-import { DocumentsPage, ProfilePage, ReviewPage } from "./ProfilePages";
+import { DocumentsPage, ProfilePage } from "./ProfilePages";
 import { DashboardPage, TasksPage } from "./TaskPages";
 import { formatChinaTime } from "./time";
 import { DataSourcesPage } from "./ConnectorPages";
 import { WorkspacePage } from "./WorkspacePage";
-import { AgentRunsPage, ReviewCenterPage } from "./RuntimePages";
+import { AgentRunsPage, ReviewBundlePage, ReviewCenterPage } from "./RuntimePages";
 import { SettingsPage } from "./SettingsPage";
 import { OnboardingPage } from "./OnboardingPage";
+import { HelpPage } from "./HelpPage";
 
 function Brand() {
   return (
@@ -73,7 +74,7 @@ function ProductLayout() {
         <nav aria-label="主导航">
           <NavLink to="/dashboard" onClick={closeNavigation}>今日</NavLink>
           <NavigationGroup label="机会" paths={["/opportunities", "/job-posts"]} onNavigate={closeNavigation}>
-            <NavLink to="/opportunities">每日招聘</NavLink>
+            <NavLink to="/opportunities">岗位推荐</NavLink>
             <NavLink to="/job-posts">目标岗位</NavLink>
           </NavigationGroup>
           <NavigationGroup label="申请" paths={["/workspace", "/applications", "/tasks", "/interviews"]} onNavigate={closeNavigation}>
@@ -87,12 +88,12 @@ function ProductLayout() {
             <NavLink to="/materials">简历与申请材料</NavLink>
             <NavLink to="/documents">导入资料</NavLink>
           </NavigationGroup>
-          <NavigationGroup label="消息与确认" paths={["/message-center", "/reviews", "/review"]} onNavigate={closeNavigation}>
+          <NavigationGroup label="消息与确认" paths={["/message-center", "/reviews"]} onNavigate={closeNavigation}>
             <NavLink to="/message-center">招聘邮件</NavLink>
             <NavLink to="/reviews">待我确认</NavLink>
-            <NavLink to="/review">简历内容确认</NavLink>
           </NavigationGroup>
           <NavLink to="/settings" onClick={closeNavigation}>设置</NavLink>
+          <NavLink to="/help" onClick={closeNavigation}>帮助</NavLink>
         </nav>
       </aside>
       <main className="content" id="main-content" tabIndex={-1}>
@@ -102,8 +103,9 @@ function ProductLayout() {
           <Route path="/workspace" element={<WorkspacePage />} />
           <Route path="/profile" element={<ProfilePage />} />
           <Route path="/documents" element={<DocumentsPage />} />
-          <Route path="/review" element={<ReviewPage />} />
+          <Route path="/review" element={<Navigate to="/reviews?category=profile" replace />} />
           <Route path="/reviews" element={<ReviewCenterPage />} />
+          <Route path="/reviews/:id" element={<ReviewBundlePage />} />
           <Route path="/opportunities" element={<OpportunityPage />} />
           <Route path="/job-posts" element={<JobPoolPage />} />
           <Route path="/job-posts/:id" element={<JobDetailPage />} />
@@ -120,6 +122,7 @@ function ProductLayout() {
           <Route path="/interviews/:id" element={<InterviewDetailPage />} />
           <Route path="/agent-runs" element={<AgentRunsPage />} />
           <Route path="/settings" element={<SettingsPage />} />
+          <Route path="/help" element={<HelpPage />} />
           <Route path="/status" element={<StatusPage />} />
           <Route path="/jobs" element={<JobsPage />} />
           <Route path="*" element={<NotFoundPage />} />

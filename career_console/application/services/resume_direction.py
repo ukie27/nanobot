@@ -94,6 +94,7 @@ class ResumeDirectionApplicationService:
             "provider": type(provider).__name__ if provider is not None else None,
             "model": getattr(self.analyzer, "model", None),
             "prompt_version": getattr(self.analyzer, "prompt_version", "resume_direction.v1"),
+            "skill_version": getattr(self.analyzer, "skill_version", None),
             "created_at": started_at,
             "duration_ms": max(0, round((perf_counter() - started) * 1000)),
             "input_tokens": usage.get("prompt_tokens") or usage.get("input_tokens"),

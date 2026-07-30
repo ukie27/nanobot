@@ -18,13 +18,17 @@ from career_console.infrastructure.database.models import (
     MailIntelligenceAnalysisModel,
     MailIntelligenceItemModel,
     MailMessageModel,
+    ReviewBundleItemModel,
     ReviewTaskModel,
     SyncCursorModel,
     SyncRunModel,
 )
 from career_console.infrastructure.database.review_runtime import (
     create_agent_run,
+    ensure_review_bundle,
     ensure_review_task,
+    link_review_task,
+    refresh_bundle_resolution,
     set_review_resolution,
 )
 
@@ -183,6 +187,7 @@ class SqlAlchemyMailGateway:
                 error_code=None, created_at=audit["created_at"], finished_at=now,
                 provider=audit.get("provider"), model=audit.get("model"),
                 prompt_version=audit.get("prompt_version"), input_entity_type="mail_message",
+                skill_version=audit.get("skill_version"),
                 input_entity_id=message_id, input_revision=str(message.uid), input_hash=input_hash,
                 output_hash=output_hash, input_tokens=audit.get("input_tokens"),
                 output_tokens=audit.get("output_tokens"), duration_ms=audit.get("duration_ms"),
@@ -202,35 +207,57 @@ class SqlAlchemyMailGateway:
             )
             session.add(analysis)
             session.flush()
+            bundle = ensure_review_bundle(
+                session,
+                bundle_type="mail_analysis",
+                source_type="imap_agent",
+                source_entity_id=message_id,
+                section_type="recruiting_mail",
+                aggregate_key=analysis.id,
+                title=result.summary[:300] or message.subject,
+                summary=(
+                    f"{result.company or '公司待确认'} · "
+                    f"{result.job_title or '岗位待确认'}；确认后才会更新申请或创建任务。"
+                ),
+                priority=50 if result.attention_items else 35,
+                agent_run_id=run.id,
+                now=now,
+            )
+            display_order = 0
             for event in result.events:
                 self._add_intelligence_item(
-                    session, analysis, run.id, now, item_type="event", category=event.event_type,
+                    session, analysis, bundle, run.id, now, item_type="event", category=event.event_type,
                     status_candidate=event.status_candidate, occurred_at=event.occurred_at,
                     scheduled_at=None, title=event.title, details=event.details,
                     evidence=event.evidence, confidence=event.confidence, severity=None,
+                    display_order=display_order,
                 )
+                display_order += 1
             for schedule in result.schedules:
                 self._add_intelligence_item(
-                    session, analysis, run.id, now, item_type="schedule",
+                    session, analysis, bundle, run.id, now, item_type="schedule",
                     category=schedule.schedule_type, status_candidate=None, occurred_at=None,
                     scheduled_at=schedule.scheduled_at, title=schedule.title,
                     details=schedule.instructions, evidence=schedule.evidence,
-                    confidence=schedule.confidence, severity=None,
+                    confidence=schedule.confidence, severity=None, display_order=display_order,
                 )
+                display_order += 1
             for attention in result.attention_items:
                 self._add_intelligence_item(
-                    session, analysis, run.id, now, item_type="attention",
+                    session, analysis, bundle, run.id, now, item_type="attention",
                     category=attention.category, status_candidate=None, occurred_at=None,
                     scheduled_at=None, title=attention.title, details=attention.details,
                     evidence=attention.evidence, confidence=None, severity=attention.severity,
+                    display_order=display_order,
                 )
+                display_order += 1
             if match.create_record_recommended:
                 self._add_intelligence_item(
-                    session, analysis, run.id, now, item_type="create_application",
+                    session, analysis, bundle, run.id, now, item_type="create_application",
                     category="application_record", status_candidate=None, occurred_at=None,
                     scheduled_at=None, title=f"建立投递档案：{result.company or '公司待确认'} · {result.job_title or '岗位待确认'}",
                     details=match.reason, evidence=message.subject, confidence=match.confidence,
-                    severity=None,
+                    severity=None, display_order=display_order,
                 )
             session.commit()
             return self._analysis_view(session, analysis)
@@ -246,6 +273,7 @@ class SqlAlchemyMailGateway:
                 error_code=error_code, created_at=audit["created_at"], finished_at=now,
                 provider=audit.get("provider"), model=audit.get("model"),
                 prompt_version=audit.get("prompt_version"), input_entity_type="mail_message",
+                skill_version=audit.get("skill_version"),
                 input_entity_id=message_id, input_hash=input_hash,
                 input_tokens=audit.get("input_tokens"), output_tokens=audit.get("output_tokens"),
                 duration_ms=audit.get("duration_ms"), retry_count=audit.get("retry_count", 0),
@@ -279,6 +307,13 @@ class SqlAlchemyMailGateway:
             row.resolved_at = now
             if task is not None:
                 set_review_resolution(task, now=now, resolution=resolution, reason=reason)
+                bundle_ids = session.scalars(
+                    select(ReviewBundleItemModel.bundle_id).where(
+                        ReviewBundleItemModel.review_task_id == task.id
+                    )
+                ).all()
+                for bundle_id in bundle_ids:
+                    refresh_bundle_resolution(session, bundle_id, now=now)
             session.commit()
             return self._item_view(session, row)
 
@@ -288,6 +323,76 @@ class SqlAlchemyMailGateway:
             if row is None:
                 raise LookupError("邮件智能分析候选不存在。")
             return self._item_view(session, row)
+
+    def link_analysis_job(self, analysis_id: str, *, job_post_id: str) -> None:
+        now = datetime.now(UTC)
+        with self._session_factory() as session:
+            row = session.get(MailIntelligenceAnalysisModel, analysis_id)
+            if row is None:
+                raise LookupError("邮件智能分析不存在。")
+            if row.job_post_id not in {None, job_post_id}:
+                raise ValueError("邮件智能分析已关联其他岗位。")
+            row.job_post_id = job_post_id
+            row.updated_at = now
+            session.commit()
+
+    def complete_auto_reconciliation(
+        self,
+        analysis_id: str,
+        *,
+        application_id: str,
+        job_post_id: str,
+        reason: str,
+        item_categories: tuple[str, ...],
+    ) -> None:
+        now = datetime.now(UTC)
+        with self._session_factory() as session:
+            analysis = session.get(MailIntelligenceAnalysisModel, analysis_id)
+            if analysis is None:
+                raise LookupError("邮件智能分析不存在。")
+            analysis.application_id = application_id
+            analysis.job_post_id = job_post_id
+            analysis.match_reason = reason[:500]
+            analysis.updated_at = now
+            items = session.scalars(
+                select(MailIntelligenceItemModel).where(
+                    MailIntelligenceItemModel.analysis_id == analysis_id,
+                    MailIntelligenceItemModel.status == "pending",
+                )
+            ).all()
+            bundle_ids: set[str] = set()
+            for item in items:
+                if item.item_type != "create_application" and item.category not in item_categories:
+                    continue
+                item.status = "confirmed"
+                item.version += 1
+                item.resolution_reason = reason[:500]
+                item.resolved_at = now
+                task = session.scalar(
+                    select(ReviewTaskModel).where(
+                        ReviewTaskModel.entity_type == "mail_intelligence_item",
+                        ReviewTaskModel.entity_id == item.id,
+                    )
+                )
+                if task is None:
+                    continue
+                set_review_resolution(
+                    task,
+                    now=now,
+                    resolution="confirmed",
+                    reason=reason,
+                    resolved_by="system",
+                )
+                bundle_ids.update(
+                    session.scalars(
+                        select(ReviewBundleItemModel.bundle_id).where(
+                            ReviewBundleItemModel.review_task_id == task.id
+                        )
+                    ).all()
+                )
+            for bundle_id in bundle_ids:
+                refresh_bundle_resolution(session, bundle_id, now=now)
+            session.commit()
 
     def start_run(self, *, trigger_type: str) -> dict[str, Any]:
         now = datetime.now(UTC)
@@ -597,8 +702,9 @@ class SqlAlchemyMailGateway:
 
     @staticmethod
     def _add_intelligence_item(
-        session, analysis, agent_run_id: str, now: datetime, **values: Any
+        session, analysis, bundle, agent_run_id: str, now: datetime, **values: Any
     ) -> None:
+        display_order = int(values.pop("display_order", 0))
         values["occurred_at"] = SqlAlchemyMailGateway._utc(values.get("occurred_at"))
         values["scheduled_at"] = SqlAlchemyMailGateway._utc(values.get("scheduled_at"))
         row = MailIntelligenceItemModel(
@@ -607,12 +713,21 @@ class SqlAlchemyMailGateway:
         )
         session.add(row)
         session.flush()
-        ensure_review_task(
+        task = ensure_review_task(
             session, task_type="mail_intelligence_review",
             entity_type="mail_intelligence_item", entity_id=row.id,
             title=row.title, summary=f"{row.details}\n证据：{row.evidence}".strip(),
             source_type="imap_agent", priority=50 if row.severity == "critical" else 35,
             agent_run_id=agent_run_id, now=now,
+        )
+        link_review_task(
+            session,
+            bundle=bundle,
+            task=task,
+            entity_type="mail_intelligence_item",
+            entity_id=row.id,
+            display_order=display_order,
+            now=now,
         )
 
     @classmethod

@@ -1,0 +1,16 @@
+{
+  "input": {"document_id": "doc-001", "document_text": "项目：校园招聘看板。技术：Python、FastAPI。成果：接口响应降低 30%。"},
+  "output": {
+    "schemaVersion": "candidate_profile_object.v2",
+    "objects": [
+      {
+        "category": "project",
+        "objectKey": "project:校园招聘看板",
+        "title": "校园招聘看板",
+        "content": "项目：校园招聘看板\n技术：Python、FastAPI\n成果：接口响应降低 30%",
+        "evidenceTexts": ["项目：校园招聘看板", "技术：Python、FastAPI", "成果：接口响应降低 30%"],
+        "confidence": 0.99
+      }
+    ]
+  }
+}

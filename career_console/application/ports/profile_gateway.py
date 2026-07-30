@@ -8,6 +8,14 @@ from career_console.application.ports.fact_extractor import ExtractedFact
 
 
 class ProfileGateway(Protocol):
+    def get_completed_import(
+        self,
+        *,
+        sha256: str,
+        extractor_name: str,
+        extractor_schema_version: str,
+    ) -> dict[str, Any] | None: ...
+
     def save_import(
         self,
         *,
@@ -26,6 +34,7 @@ class ProfileGateway(Protocol):
         provider: str | None = None,
         model: str | None = None,
         prompt_version: str | None = None,
+        skill_version: str | None = None,
         duration_ms: int | None = None,
         input_tokens: int | None = None,
         output_tokens: int | None = None,
@@ -58,3 +67,11 @@ class ProfileGateway(Protocol):
     ) -> dict[str, Any]: ...
 
     def batch_confirm(self, *, items: list[tuple[str, int]]) -> list[dict[str, Any]]: ...
+
+    def batch_reject(
+        self,
+        *,
+        items: list[tuple[str, int]],
+        reason: str,
+        changed_by: str = "user",
+    ) -> list[dict[str, Any]]: ...

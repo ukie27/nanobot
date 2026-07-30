@@ -31,6 +31,7 @@ import {
   pickWorkspaceDirectory,
   reopenOnboarding,
   restartService,
+  runDueSchedules,
   testProvider,
   testQQChannel,
   updateAgentConfiguration,
@@ -134,7 +135,7 @@ const TASK_LABELS: Record<AgentTaskName, string> = {
   fact_extraction: "事实提取", mail_intelligence: "邮件分析",
   profile_insight: "档案洞察", job_fit: "岗位匹配",
   resume_direction: "简历方向", resume_drafting: "材料撰写",
-  material_review: "材料复核",
+  material_review: "材料复核", daily_job_recommendation: "每日岗位推荐",
 };
 
 export function ProviderAgentConfiguration({ status }: { status: ConfigurationStatus }) {
@@ -258,7 +259,9 @@ export function ProviderAgentConfiguration({ status }: { status: ConfigurationSt
     </section>
     <details className="panel settings-disclosure"><summary><span><small>高级设置</small><strong>按任务选择不同模型</strong></span><em>普通使用无需调整</em></summary><p className="section-note">默认让所有智能功能使用同一个 AI 服务。只有需要控制成本或使用不同模型复核时，才逐项调整。</p>
       <form onSubmit={agentSubmit}><div className="agent-mapping-list">{(Object.keys(TASK_LABELS) as AgentTaskName[]).map(name => {
-        const task = status.configuration.agents.tasks[name];
+        const task = status.configuration.agents.tasks[name] ?? {
+          enabled: false, provider_id: null, model: null,
+        };
         const providerRevision = providerItems.map(provider => provider.id).join(",");
         return <div className="agent-mapping-row" key={`${name}:${providerRevision}`}><label className="check-row"><input type="checkbox" name={`${name}.enabled`} defaultChecked={task.enabled} />{TASK_LABELS[name]}</label><label>AI 服务<select name={`${name}.provider_id`} defaultValue={task.provider_id ?? ""}><option value="">未配置</option>{providerItems.map(provider => <option value={provider.id} key={provider.id}>{provider.display_name}</option>)}</select></label><label>指定模型<input name={`${name}.model`} defaultValue={task.model ?? ""} placeholder="留空使用默认模型" /></label></div>;
       })}</div><div className="form-actions"><button type="button" className="secondary" disabled={!providerItems.length} onClick={event => {
@@ -338,6 +341,17 @@ export function SchedulerSettings({ status }: { status: ConfigurationStatus }) {
     client.invalidateQueries({ queryKey: ["configuration-changes"] }),
     client.invalidateQueries({ queryKey: ["scheduler-runs"] }),
   ]); } });
+  const runNow = useMutation({
+    mutationFn: runDueSchedules,
+    onSuccess: async () => {
+      await Promise.all([
+        client.invalidateQueries({ queryKey: ["scheduler-runs"] }),
+        client.invalidateQueries({ queryKey: ["dashboard"] }),
+        client.invalidateQueries({ queryKey: ["applications"] }),
+        client.invalidateQueries({ queryKey: ["job-recommendations"] }),
+      ]);
+    },
+  });
   const item = status.configuration.scheduler;
   const triggerLabels: Record<string, string> = {
     manual: "手动运行",
@@ -353,17 +367,30 @@ export function SchedulerSettings({ status }: { status: ConfigurationStatus }) {
     running: "运行中",
     skipped: "已跳过",
   };
-  const meaningfulRuns = (runs.data?.items ?? []).filter(run => {
-    const counters = Object.values(run.counters);
-    return run.status === "failed" || run.status === "partial" || run.error_codes.length > 0
-      || counters.some(value => value > 0);
-  });
+  const visibleRuns = (runs.data?.items ?? []).slice(0, 20).reduce<Array<{
+    run: NonNullable<typeof runs.data>["items"][number];
+    repeats: number;
+  }>>((items, run) => {
+    const previous = items.at(-1);
+    const repeatedFailure = run.error_codes.length > 0 || run.status === "failed";
+    const signature = `${run.status}:${run.error_codes.join(",")}`;
+    const previousSignature = previous
+      ? `${previous.run.status}:${previous.run.error_codes.join(",")}`
+      : "";
+    if (repeatedFailure && previous && signature === previousSignature) {
+      previous.repeats += 1;
+    } else {
+      items.push({ run, repeats: 1 });
+    }
+    return items;
+  }, []).slice(0, 10);
   return <div className="settings-stack provider-settings"><section className="panel"><div className="panel-heading"><div><p className="eyebrow">北京时间运行</p><h2>自动任务</h2></div><span>Asia/Shanghai</span></div><p className="section-note">统一控制任务提醒、邮件轮询、牛客当天同步、档案维护与通知分发。失败会隔离记录，不会阻断其他任务。</p><form className="form-grid" onSubmit={event => { event.preventDefault(); save.mutate(new FormData(event.currentTarget)); }}>
     <label className="check-row"><input name="enabled" type="checkbox" defaultChecked={item.enabled} />启用自动任务服务</label>
-    <label className="check-row"><input name="reminders_enabled" type="checkbox" defaultChecked={item.reminders_enabled} />发送任务与日程提醒</label><label className="check-row"><input name="connector_jobs_enabled" type="checkbox" defaultChecked={item.connector_jobs_enabled} />同步招聘信息与邮箱</label><label className="check-row"><input name="profile_maintenance_enabled" type="checkbox" defaultChecked={item.profile_maintenance_enabled} />每天整理职业档案</label><label>档案整理时间<input name="profile_maintenance_time" type="time" defaultValue={item.profile_maintenance_time} /></label><label className="check-row"><input name="channel_dispatch_enabled" type="checkbox" defaultChecked={item.channel_dispatch_enabled} />向已配置的通知渠道发送提醒</label>
+    <label className="check-row"><input name="reminders_enabled" type="checkbox" defaultChecked={item.reminders_enabled} />发送任务与日程提醒</label><label className="check-row"><input name="connector_jobs_enabled" type="checkbox" defaultChecked={item.connector_jobs_enabled} />同步招聘信息与邮箱</label><label className="check-row"><input name="profile_maintenance_enabled" type="checkbox" defaultChecked={item.profile_maintenance_enabled} />每天分析并完善职业档案</label><label>每日分析时间<input name="profile_maintenance_time" type="time" defaultValue={item.profile_maintenance_time} /></label><label className="check-row"><input name="channel_dispatch_enabled" type="checkbox" defaultChecked={item.channel_dispatch_enabled} />向已配置的通知渠道发送提醒</label>
+    <p className="section-note wide">到达设定时间后，系统会按北京时间生成当天摘要，并用专职档案 Skill 分析已确认信息。相同输入不会重复生成洞察，所有新洞察仍需你确认。</p>
     <details className="wide inline-advanced"><summary>高级运行频率</summary><label>后台检查周期（秒）<input name="poll_seconds" type="number" min="10" max="3600" defaultValue={item.poll_seconds} /></label></details>
-    <div className="form-actions"><button disabled={save.isPending}>{save.isPending ? "正在保存…" : "保存自动任务设置"}</button></div>
-  </form>{save.error && <p className="form-error">{save.error.message}</p>}<ConfigurationTestButton capability="scheduler" label="测试自动任务配置" /></section><section className="panel"><div className="panel-heading"><div><p className="eyebrow">有效运行</p><h2>最近自动任务</h2></div><span>{meaningfulRuns.length} 条</span></div>{meaningfulRuns.length ? meaningfulRuns.map(run => <article className="change-row" key={run.id}><strong>{triggerLabels[run.trigger_type] ?? run.trigger_type} · {statusLabels[run.status] ?? run.status}</strong><span>提醒 {run.counters.reminders_triggered ?? 0} · 数据来源 {run.counters.connector_runs_processed ?? 0} · 通知 {run.counters.channel_sent ?? 0}</span><small>{run.error_codes.join("、") || `${formatChinaTime(run.started_at)}（北京时间）`}</small></article>) : <div className="quiet-state"><strong>自动任务服务运行正常</strong><p>最近没有产生提醒、数据同步、通知或错误。空检查记录已隐藏。</p></div>}<details className="audit-details"><summary>关于空检查记录</summary><p>后台仍会按设置周期检查任务；没有产生业务结果的心跳不会显示在这里。</p></details></section></div>;
+    <div className="form-actions"><button disabled={save.isPending}>{save.isPending ? "正在保存…" : "保存自动任务设置"}</button><button type="button" className="secondary" disabled={runNow.isPending} onClick={() => runNow.mutate()}>{runNow.isPending ? "正在运行…" : "立即运行一次"}</button></div>
+  </form>{(save.error || runNow.error) && <p className="form-error">{(save.error ?? runNow.error)?.message}</p>}<ConfigurationTestButton capability="scheduler" label="检查配置完整性" /></section><section className="panel"><div className="panel-heading"><div><p className="eyebrow">运行记录</p><h2>最近自动任务</h2></div><span>{runs.data?.total ?? 0} 条</span></div>{visibleRuns.length ? visibleRuns.map(({ run, repeats }) => <article className="change-row" key={run.id}><strong>{triggerLabels[run.trigger_type] ?? run.trigger_type} · {statusLabels[run.status] ?? run.status}{repeats > 1 ? `（连续 ${repeats} 次）` : ""}</strong><span>提醒 {run.counters.reminders_triggered ?? 0} · 数据来源 {run.counters.connector_runs_processed ?? 0} · 档案洞察 {run.counters.profile_insights_created ?? 0} · 通知 {run.counters.channel_sent ?? 0}</span><small>{run.error_codes.join("、") || `${formatChinaTime(run.started_at)}（北京时间）`}</small></article>) : <div className="quiet-state"><strong>还没有自动任务记录</strong><p>保存设置后可立即运行一次，确认提醒、数据来源和通知链路。</p></div>}<details className="audit-details"><summary>记录保留规则</summary><p>保留最近 30 天、最多 200 条运行记录；连续相同失败会合并显示。</p></details></section></div>;
 }
 
 export function DataSourceSettings({ embedded = false }: { embedded?: boolean }) {
@@ -482,9 +509,17 @@ export function SettingsPage() {
   const error = workspace.error ?? configuration.error ?? changes.error;
   const sections = [["general", "基础设置"], ["ai", "AI 服务"], ["sources", "数据来源"], ["notifications", "消息通知"], ["automation", "定时任务"], ["data", "备份与迁移"], ["advanced", "高级设置"]] as const;
   type SettingsSection = (typeof sections)[number][0];
+  const sectionAliases: Record<string, SettingsSection> = {
+    providers: "ai",
+    scheduler: "automation",
+    backup: "data",
+  };
   const requestedSection = searchParams.get("section");
-  const section: SettingsSection = sections.some(([value]) => value === requestedSection)
-    ? requestedSection as SettingsSection
+  const normalizedSection = requestedSection
+    ? sectionAliases[requestedSection] ?? requestedSection
+    : null;
+  const section: SettingsSection = sections.some(([value]) => value === normalizedSection)
+    ? normalizedSection as SettingsSection
     : "general";
   const selectSection = (value: SettingsSection) => {
     setSearchParams(value === "general" ? {} : { section: value });

@@ -483,7 +483,8 @@ async def test_provider(
             tools=None, model=model, max_tokens=8, temperature=0,
         ), timeout=30)
         if response.finish_reason == "error":
-            test_status, error_code = "failed", "provider_rejected"
+            test_status = "failed"
+            error_code = response.error_code or "provider_rejected"
     except ProviderConfigurationError:
         test_status, error_code = "failed", "credential_missing"
     except TimeoutError:

@@ -1,0 +1,14 @@
+{
+  "nowcoderWhoami": {
+    "ok": true,
+    "identity": {"displayName": "测试会话", "source": "nowcoder"}
+  },
+  "bossWhoamiExpired": {
+    "ok": false,
+    "errorCode": "session_expired"
+  },
+  "writeCommand": {
+    "allowed": false,
+    "errorCode": "opencli_command_not_allowed"
+  }
+}

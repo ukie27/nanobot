@@ -114,3 +114,134 @@ def test_provider_connection_test_discards_content_and_audits(tmp_path: Path) ->
         assert history["total"] == 1
         assert "content" not in json.dumps(history).lower()
         assert "sensitive model output" not in json.dumps(history)
+
+
+def test_provider_connection_test_preserves_sanitized_error_code(tmp_path: Path) -> None:
+    class FakeProvider:
+        async def chat(self, **_kwargs):
+            return LLMResponse(
+                content="Error calling LLM: authentication failed.",
+                finish_reason="error",
+                error_code="provider_authentication_failed",
+            )
+
+    client, app = _client(tmp_path)
+    with client:
+        created = client.put("/api/v1/configuration/providers/local", json={
+            "expected_revision": 1, "provider_type": "ollama",
+            "display_name": "Local", "api_base": "http://127.0.0.1:11434/v1",
+            "default_model": "qwen-local", "models": ["qwen-local"],
+        })
+        assert created.status_code == 200, created.text
+        app.state.agent_runtime.factory.build = lambda *_args: FakeProvider()
+
+        tested = client.post("/api/v1/configuration/providers/local/test", json={})
+
+        assert tested.status_code == 200
+        assert tested.json()["status"] == "failed"
+        assert tested.json()["error_code"] == "provider_authentication_failed"
+
+
+def test_resume_import_uses_updated_provider_without_service_restart(
+    tmp_path: Path,
+) -> None:
+    import_calls: list[tuple[str, str | None]] = []
+
+    class FakeProvider:
+        def __init__(self, api_key: str) -> None:
+            self.api_key = api_key
+
+        async def chat(self, **_kwargs):
+            return LLMResponse(content="OK")
+
+        async def chat_with_retry(self, **kwargs):
+            import_calls.append((self.api_key, kwargs.get("model")))
+            return LLMResponse(
+                content=json.dumps(
+                    {
+                        "schemaVersion": "candidate_profile_object.v2",
+                        "objects": [],
+                    }
+                )
+            )
+
+    client, app = _client(tmp_path)
+    with client:
+        secrets = InMemorySecretStore()
+        app.state.secret_store = secrets
+        app.state.agent_runtime.factory.secrets = secrets
+
+        def build(provider_config, _task):
+            return FakeProvider(secrets.get(provider_config.secret_ref))
+
+        app.state.agent_runtime.factory.build = build
+        created = client.put(
+            "/api/v1/configuration/providers/main",
+            json={
+                "expected_revision": 1,
+                "provider_type": "openai",
+                "display_name": "Main",
+                "default_model": "model-v1",
+                "models": ["model-v1", "model-v2"],
+                "api_key": "credential-v1",
+            },
+        )
+        assert created.status_code == 200, created.text
+
+        status = client.get("/api/v1/configuration").json()
+        agents = status["configuration"]["agents"]
+        agents["tasks"]["fact_extraction"].update(
+            {
+                "enabled": True,
+                "provider_id": "main",
+                "model": "model-v1",
+            }
+        )
+        mapped = client.put(
+            "/api/v1/configuration/agents",
+            json={"expected_revision": status["revision"], "agents": agents},
+        )
+        assert mapped.status_code == 200, mapped.text
+
+        first_import = client.post(
+            "/api/v1/documents/import-text",
+            json={"name": "resume-v1", "text": "Skills: Python"},
+        )
+        assert first_import.status_code == 201, first_import.text
+
+        status = client.get("/api/v1/configuration").json()
+        updated = client.put(
+            "/api/v1/configuration/providers/main",
+            json={
+                "expected_revision": status["revision"],
+                "provider_type": "openai",
+                "display_name": "Main",
+                "default_model": "model-v2",
+                "models": ["model-v1", "model-v2"],
+                "api_key": "credential-v2",
+            },
+        )
+        assert updated.status_code == 200, updated.text
+
+        status = client.get("/api/v1/configuration").json()
+        agents = status["configuration"]["agents"]
+        agents["tasks"]["fact_extraction"]["model"] = "model-v2"
+        remapped = client.put(
+            "/api/v1/configuration/agents",
+            json={"expected_revision": status["revision"], "agents": agents},
+        )
+        assert remapped.status_code == 200, remapped.text
+        tested = client.post("/api/v1/configuration/providers/main/test", json={})
+        assert tested.status_code == 200
+        assert tested.json()["status"] == "passed"
+
+        second_import = client.post(
+            "/api/v1/documents/import-text",
+            json={"name": "resume-v2", "text": "Skills: Python and SQL"},
+        )
+        assert second_import.status_code == 201, second_import.text
+
+    assert import_calls == [
+        ("credential-v1", "model-v1"),
+        ("credential-v2", "model-v2"),
+    ]

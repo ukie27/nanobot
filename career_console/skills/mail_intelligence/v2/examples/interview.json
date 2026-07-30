@@ -1,0 +1,12 @@
+{
+  "input": {
+    "message": {"subject": "面试通知", "content": "请于2026年7月30日14:30参加线上面试。"},
+    "candidate_applications": [],
+    "business_timezone": "Asia/Shanghai"
+  },
+  "expected": {
+    "relevance": "recruiting",
+    "has_schedule": true,
+    "evidence_exact": true
+  }
+}

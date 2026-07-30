@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 router = APIRouter(prefix="/api/v1/runtime", tags=["career-runtime"])
 
@@ -26,6 +26,11 @@ class ReviewTaskResponse(BaseModel):
     target_url: str
     entity_subtype: str | None = None
     can_resolve_inline: bool = False
+    bundle_type: str | None = None
+    section_type: str | None = None
+    aggregate_key: str | None = None
+    item_count: int = 1
+    items: list[dict[str, Any]] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
     resolved_at: datetime | None
@@ -37,6 +42,12 @@ class ReviewTaskResponse(BaseModel):
 class ReviewTaskListResponse(BaseModel):
     items: list[ReviewTaskResponse]
     total: int
+
+
+class ReviewBundleResolveRequest(BaseModel):
+    expected_version: int = Field(ge=1)
+    resolution: str = Field(pattern="^(confirmed|rejected)$")
+    reason: str = Field(default="", max_length=500)
 
 
 class AgentRunResponse(BaseModel):
@@ -87,6 +98,23 @@ def get_review(review_id: str, request: Request) -> dict:
         return request.app.state.runtime_service.review(review_id)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/reviews/{review_id}/resolve", response_model=ReviewTaskResponse)
+def resolve_review_bundle(
+    review_id: str, body: ReviewBundleResolveRequest, request: Request
+) -> dict:
+    try:
+        return request.app.state.runtime_service.resolve_review_bundle(
+            review_id,
+            expected_version=body.expected_version,
+            resolution=body.resolution,
+            reason=body.reason,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.get("/agent-runs", response_model=AgentRunListResponse)

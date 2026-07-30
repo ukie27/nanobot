@@ -14,8 +14,14 @@ class CareerApplicationService:
     def create(self, *, job_post_id: str) -> dict[str, Any]:
         return self.gateway.create_application(job_post_id=job_post_id)
 
-    def mark_job_ready(self, *, job_post_id: str) -> int:
-        return self.gateway.mark_job_ready(job_post_id)
+    def bind_resume(self, application_id: str, **kwargs: Any) -> dict[str, Any]:
+        return self.gateway.bind_resume(application_id, **kwargs)
+
+    def get_default_resume(self) -> dict[str, Any] | None:
+        return self.gateway.get_default_resume()
+
+    def set_default_resume(self, **kwargs: Any) -> dict[str, Any]:
+        return self.gateway.set_default_resume(**kwargs)
 
     def submit(self, application_id: str, **kwargs: Any) -> dict[str, Any]:
         return self.gateway.submit_application(application_id, **kwargs)

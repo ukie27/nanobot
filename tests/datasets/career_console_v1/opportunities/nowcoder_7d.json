@@ -1,0 +1,13 @@
+{
+  "lookbackDays": 7,
+  "manualOnly": true,
+  "items": [
+    {
+      "externalId": "nc-20260724-002",
+      "company": "远山数据（虚构）",
+      "title": "数据平台校招",
+      "publishedAt": "2026-07-24T10:00:00+08:00",
+      "sourceUrl": "https://example.com/campus/nc-20260724-002"
+    }
+  ]
+}

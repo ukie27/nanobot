@@ -6,7 +6,7 @@ import json
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import exists, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from career_console.infrastructure.database.models import (
@@ -14,6 +14,8 @@ from career_console.infrastructure.database.models import (
     ApplicationEventProposalModel,
     MailIntelligenceAnalysisModel,
     MailIntelligenceItemModel,
+    ReviewBundleItemModel,
+    ReviewBundleModel,
     ReviewTaskModel,
 )
 
@@ -34,22 +36,89 @@ class SqlAlchemyRuntimeGateway:
 
     def list_reviews(self, *, status: str | None = "open") -> list[dict[str, Any]]:
         with self._session_factory() as session:
-            statement = select(ReviewTaskModel)
+            bundle_statement = select(ReviewBundleModel)
             if status is not None:
-                statement = statement.where(ReviewTaskModel.status == status)
-            rows = session.scalars(
-                statement.order_by(
+                bundle_statement = bundle_statement.where(ReviewBundleModel.status == status)
+            bundles = session.scalars(
+                bundle_statement.order_by(
+                    ReviewBundleModel.priority.desc(), ReviewBundleModel.created_at
+                )
+            ).all()
+            legacy_statement = select(ReviewTaskModel).where(
+                ~exists().where(ReviewBundleItemModel.review_task_id == ReviewTaskModel.id)
+            )
+            if status is not None:
+                legacy_statement = legacy_statement.where(ReviewTaskModel.status == status)
+            legacy = session.scalars(
+                legacy_statement.order_by(
                     ReviewTaskModel.priority.desc(), ReviewTaskModel.created_at
                 )
             ).all()
-            return [self._review_view(session, item) for item in rows]
+            return [
+                *[self._bundle_view(session, item) for item in bundles],
+                *[self._review_view(session, item) for item in legacy],
+            ]
 
     def get_review(self, review_id: str) -> dict[str, Any]:
         with self._session_factory() as session:
+            bundle = session.get(ReviewBundleModel, review_id)
+            if bundle is not None:
+                return self._bundle_view(session, bundle)
             row = session.get(ReviewTaskModel, review_id)
             if row is None:
                 raise LookupError("审查任务不存在。")
             return self._review_view(session, row)
+
+    @classmethod
+    def _bundle_view(cls, session: Session, row: ReviewBundleModel) -> dict[str, Any]:
+        links = session.scalars(
+            select(ReviewBundleItemModel)
+            .where(ReviewBundleItemModel.bundle_id == row.id)
+            .order_by(ReviewBundleItemModel.display_order, ReviewBundleItemModel.created_at)
+        ).all()
+        items = []
+        for link in links:
+            task = session.get(ReviewTaskModel, link.review_task_id)
+            if task is not None:
+                item = cls._review_view(session, task)
+                item["required"] = bool(link.required)
+                items.append(item)
+        first = items[0] if items else None
+        return {
+            "id": row.id,
+            "task_type": f"{row.bundle_type}_review",
+            "entity_type": "review_bundle",
+            "entity_id": row.id,
+            "title": row.title,
+            "summary": row.summary,
+            "source_type": row.source_type,
+            "priority": row.priority,
+            "status": row.status,
+            "version": row.version,
+            "agent_run_id": row.agent_run_id,
+            "target_url": cls._bundle_target(row, first),
+            "entity_subtype": row.bundle_type,
+            "can_resolve_inline": False,
+            "bundle_type": row.bundle_type,
+            "section_type": row.section_type,
+            "aggregate_key": row.aggregate_key,
+            "item_count": len(items),
+            "items": items,
+            "created_at": cls._utc(row.created_at),
+            "updated_at": cls._utc(row.updated_at),
+            "resolved_at": cls._utc(row.resolved_at),
+            "resolution": row.resolution,
+            "resolution_reason": row.resolution_reason,
+            "resolved_by": row.resolved_by,
+        }
+
+    @staticmethod
+    def _bundle_target(row: ReviewBundleModel, first: dict[str, Any] | None) -> str:
+        if row.bundle_type == "profile_section":
+            return f"/reviews/{row.id}"
+        if row.bundle_type == "mail_analysis":
+            return first["target_url"] if first else "/message-center"
+        return f"/reviews/{row.id}"
 
     def list_agent_runs(self, *, limit: int = 100) -> list[dict[str, Any]]:
         with self._session_factory() as session:
@@ -91,6 +160,11 @@ class SqlAlchemyRuntimeGateway:
             "target_url": cls._review_target(session, row),
             "entity_subtype": entity_subtype,
             "can_resolve_inline": can_resolve_inline,
+            "bundle_type": None,
+            "section_type": None,
+            "aggregate_key": None,
+            "item_count": 1,
+            "items": [],
             "created_at": cls._utc(row.created_at),
             "updated_at": cls._utc(row.updated_at or row.created_at),
             "resolved_at": cls._utc(row.resolved_at),

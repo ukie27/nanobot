@@ -1,0 +1,6 @@
+{
+  "schemaVersion": "resume.v1",
+  "candidate": "林知远（虚构）",
+  "factReferences": ["fact-education-001", "fact-project-001", "fact-skill-001"],
+  "sections": ["教育背景", "项目经历", "技能"]
+}

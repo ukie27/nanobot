@@ -1,0 +1,16 @@
+{
+  "applications": [
+    {
+      "id": "application-full-journey",
+      "company": "星河科技（虚构）",
+      "jobTitle": "Python 后端工程师",
+      "states": ["planned", "submitted", "assessment", "written_test", "interview", "offer", "accepted"]
+    },
+    {
+      "id": "application-rejected",
+      "company": "远山数据（虚构）",
+      "jobTitle": "后端平台工程师",
+      "states": ["planned", "submitted", "rejected"]
+    }
+  ]
+}

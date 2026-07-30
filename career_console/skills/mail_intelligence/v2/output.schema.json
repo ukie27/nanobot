@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "MailIntelligenceOutput",
+  "type": "object",
+  "required": ["schemaVersion", "relevance", "messageType", "summary", "applicationMatch", "events", "schedules", "attentionItems"],
+  "properties": {
+    "schemaVersion": {"const": "mail_intelligence.v1"},
+    "relevance": {"enum": ["recruiting", "possibly_related", "unrelated"]},
+    "messageType": {"type": "string"},
+    "summary": {"type": "string"},
+    "applicationMatch": {"type": "object"},
+    "events": {"type": "array", "items": {"type": "object"}},
+    "schedules": {"type": "array", "items": {"type": "object"}},
+    "attentionItems": {"type": "array", "items": {"type": "object"}}
+  }
+}

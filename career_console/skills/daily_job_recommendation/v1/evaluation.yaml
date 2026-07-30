@@ -1,0 +1,10 @@
+skill: daily_job_recommendation
+version: v1
+business_timezone: Asia/Shanghai
+checks:
+  - only_confirmed_profile_evidence
+  - complete_requirement_coverage
+  - valid_requirement_and_fact_references
+  - hard_gates_require_direct_evidence
+  - rejected_jobs_not_visible
+  - recommendation_is_actionable

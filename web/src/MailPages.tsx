@@ -122,7 +122,7 @@ export function MessageCenterPage({ setupOnly = false }: { setupOnly?: boolean }
       <div className="capability-status-grid" aria-label="邮箱状态">
         <div><span>账户</span><strong>{connector.data?.configured ? "已配置" : "未配置"}</strong></div>
         <div><span>凭据</span><strong>{connector.data?.account?.credential_configured ? "已保存" : "未保存"}</strong></div>
-        <div><span>连接</span><strong>{connector.data?.health_status === "healthy" ? "正常" : "待测试"}</strong></div>
+        <div><span>连接</span><strong>{connectorStatusLabel[connector.data?.health_status ?? "unconfigured"] ?? "待检查"}</strong></div>
         <div><span>同步</span><strong>{connector.data?.enabled ? "自动同步已启用" : "未启用"}</strong></div>
         <div><span>最近同步</span><strong>{connector.data?.runs[0]?.started_at ? `${formatChinaTime(connector.data.runs[0].started_at)}（北京时间）` : "尚未同步"}</strong></div>
       </div>
@@ -149,7 +149,7 @@ export function MessageCenterPage({ setupOnly = false }: { setupOnly?: boolean }
       <p>请先在设置中保存邮箱账号与授权码，并完成只读连接测试。配置后这里仅展示邮件和识别结果。</p>
       <Link className="download-button" to="/settings?section=sources">配置招聘邮箱</Link>
     </section> : connector.data?.configured && <section className="panel mail-connection-summary">
-      <div className="panel-heading"><div><p className="eyebrow">连接状态</p><h2>{connector.data.account?.email_address ?? "招聘邮箱"}</h2></div><span>{connectorStatusLabel[connector.data.health_status] ?? "待检查"}</span></div>
+      <div className="panel-heading"><div><p className="eyebrow">连接状态</p><h2>{connector.data.account?.username_masked ?? "招聘邮箱"}</h2></div><span>{connectorStatusLabel[connector.data.health_status] ?? "待检查"}</span></div>
       <div className="capability-status-grid" aria-label="邮箱运行状态">
         <div><span>自动同步</span><strong>{connector.data.enabled ? "已启用" : "未启用"}</strong></div>
         <div><span>最近同步</span><strong>{connector.data.runs[0]?.started_at ? `${formatChinaTime(connector.data.runs[0].started_at)}（北京时间）` : "尚未同步"}</strong></div>

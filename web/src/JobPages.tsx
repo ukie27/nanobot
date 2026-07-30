@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState, type FormEvent } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 
-import { analyzeJob, createApplication, generateJobFitProposal, generateResumeDirections, getJobFitProposals, getJobPost, getJobPosts, getOpportunity, getResumeDirections, importJobFile, importJobText, importJobUrl, resolveJobFitProposal, resolveResumeDirections, type JobAnalysisSummary, type JobFitProposal, type ResumeDirectionProposal } from "./api";
+import { analyzeJob, createApplication, generateJobFitProposal, generateResumeDirections, getApplications, getJobFitProposals, getJobPost, getJobPosts, getOpportunity, getResumeDirections, importJobFile, importJobText, importJobUrl, resolveJobFitProposal, resolveResumeDirections, type JobAnalysisSummary, type JobFitProposal, type ResumeDirectionProposal } from "./api";
 import { formatChinaTime } from "./time";
 
 const RECOMMENDATIONS: Record<string, string> = { blocked: "硬条件不满足", high_priority: "高优先级", consider: "值得考虑", low_priority: "低优先级" };
@@ -41,6 +41,7 @@ export function JobDetailPage() {
   const { id = "" } = useParams(); const client = useQueryClient(); const navigate = useNavigate();
   const [directionChoices, setDirectionChoices] = useState<Record<string, string[]>>({});
   const query = useQuery({ queryKey: ["job-post", id], queryFn: () => getJobPost(id), enabled: Boolean(id) });
+  const applications = useQuery({ queryKey: ["applications"], queryFn: getApplications, enabled: Boolean(id) });
   const agentFits = useQuery({ queryKey: ["job-fit-proposals", id], queryFn: () => getJobFitProposals(id), enabled: Boolean(id) });
   const directions = useQuery({ queryKey: ["resume-directions", id], queryFn: () => getResumeDirections(id), enabled: Boolean(id) });
   const rerun = useMutation({ mutationFn: () => analyzeJob(id), onSuccess: async () => { await client.invalidateQueries({ queryKey: ["job-post", id] }); await client.invalidateQueries({ queryKey: ["job-posts"] }); } });
@@ -48,14 +49,22 @@ export function JobDetailPage() {
   const resolveAgentFit = useMutation({ mutationFn: ({ proposal, resolution }: { proposal: JobFitProposal; resolution: "confirmed" | "rejected" }) => resolveJobFitProposal(proposal, resolution), onSuccess: async () => { await client.invalidateQueries({ queryKey: ["job-fit-proposals", id] }); await client.invalidateQueries({ queryKey: ["job-post", id] }); await client.invalidateQueries({ queryKey: ["job-posts"] }); await client.invalidateQueries({ queryKey: ["unified-reviews"] }); } });
   const generateDirections = useMutation({ mutationFn: () => generateResumeDirections(id), onSuccess: async () => { await client.invalidateQueries({ queryKey: ["resume-directions", id] }); await client.invalidateQueries({ queryKey: ["unified-reviews"] }); } });
   const resolveDirections = useMutation({ mutationFn: ({ proposal, resolution }: { proposal: ResumeDirectionProposal; resolution: "confirmed" | "rejected" }) => resolveResumeDirections(proposal, resolution, directionChoices[proposal.id] ?? []), onSuccess: async () => { await client.invalidateQueries({ queryKey: ["resume-directions", id] }); await client.invalidateQueries({ queryKey: ["unified-reviews"] }); } });
-  const track = useMutation({ mutationFn: () => createApplication(id), onSuccess: (application) => navigate(`/applications/${application.id}`) });
+  const track = useMutation({ mutationFn: () => createApplication(id), onSuccess: async (application) => {
+    await client.invalidateQueries({ queryKey: ["applications"] });
+    navigate(`/applications/${application.id}`);
+  } });
   if (query.isLoading) return <section className="empty-state"><p>正在读取岗位…</p></section>;
   if (query.error || !query.data) return <section className="notice error">{query.error?.message ?? "岗位不存在"}</section>;
   const job = query.data; const analysis = job.analyses[0];
   const analysisReady = job.requirements.length > 0 && Boolean(analysis);
   const analysisBusy = rerun.isPending || generateAgentFit.isPending;
+  const existingApplication = applications.data?.items?.find(item =>
+    item.job_post_id === job.id && !item.archived_at,
+  );
   const actions = analysisReady
-    ? <><Link className="download-button" to={`/materials?jobId=${job.id}`}>准备申请材料</Link><button onClick={() => track.mutate()} disabled={track.isPending}>{track.isPending ? "正在创建…" : "开始跟踪申请"}</button></>
+    ? <><Link className="download-button" to={`/materials?jobId=${job.id}`}>准备申请材料</Link>{existingApplication
+      ? <Link className="download-button" to={`/applications/${existingApplication.id}`}>查看申请</Link>
+      : <button onClick={() => track.mutate()} disabled={track.isPending || applications.isLoading}>{track.isPending ? "正在创建…" : "开始跟踪申请"}</button>}</>
     : <button onClick={() => rerun.mutate()} disabled={analysisBusy}>{analysisBusy ? "正在分析…" : "重新分析岗位"}</button>;
   return <><header className="page-header job-detail-header"><div><p className="eyebrow"><Link to="/job-posts">目标岗位</Link> / {job.company}</p><h1>{job.title}</h1><p>{job.location ?? "地点待确认"} · {job.work_mode ?? job.employment_type ?? "类型待确认"}{job.deadline_at ? ` · 截止 ${formatChinaTime(job.deadline_at)}（北京时间）` : ""}</p></div><div className="header-actions primary-actions">{actions}<details className="secondary-actions"><summary>更多岗位操作</summary><div><button className="secondary" onClick={() => generateDirections.mutate()} disabled={!analysisReady || generateDirections.isPending}>规划简历方向</button><button className="secondary" onClick={() => generateAgentFit.mutate()} disabled={!job.requirements.length || generateAgentFit.isPending}>深入分析岗位</button>{analysisReady && <button className="secondary" onClick={() => rerun.mutate()} disabled={rerun.isPending}>更新匹配结果</button>}<small>系统会根据岗位要求和已确认经历选择合适的分析方式。</small></div></details></div></header>
     {track.error && <section className="notice error">{track.error.message}</section>}

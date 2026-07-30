@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
@@ -21,7 +23,11 @@ class _ProfileInsightAnalyzer:
     last_usage = {"input_tokens": 10, "output_tokens": 5}
     last_retry_count = 0
 
+    def __init__(self) -> None:
+        self.calls = 0
+
     def analyze(self, *, context: dict) -> ProfileInsightResult:
+        self.calls += 1
         return ProfileInsightResult.model_validate({
             "schemaVersion": "profile_insight.v1",
             "insights": [{
@@ -66,7 +72,8 @@ def _confirmed_fact(client: TestClient) -> dict:
 def test_preferences_fact_events_digest_and_strategy_are_traceable(tmp_path) -> None:
     settings = CareerSettings(data_dir=tmp_path, mail_intelligence_mode="disabled")
     with TestClient(create_app(settings)) as client:
-        client.app.state.profile_memory_service.analyzer = _ProfileInsightAnalyzer()
+        analyzer = _ProfileInsightAnalyzer()
+        client.app.state.profile_memory_service.analyzer = analyzer
         preference = client.put("/api/v1/profile-memory/preferences/target_roles", json={
             "value": ["后端工程", "AI 应用"], "expected_version": None,
         })
@@ -95,6 +102,9 @@ def test_preferences_fact_events_digest_and_strategy_are_traceable(tmp_path) -> 
         assert insight["status"] == "proposed" and fact["id"] in insight["evidence_refs"]
         assert insight["source"] == "career_console_profile_insight"
         assert insight["agent_run_id"]
+        repeated_insight = client.post("/api/v1/profile-memory/insights").json()[0]
+        assert repeated_insight["id"] == insight["id"]
+        assert analyzer.calls == 1
         strategy = client.post("/api/v1/profile-memory/strategies").json()
         assert strategy["status"] == "proposed"
         assert strategy["content"]["target_directions"] == ["后端工程", "AI 应用"]
@@ -134,3 +144,57 @@ def test_profile_insight_rejects_unknown_fact_reference_and_audits_failure(tmp_p
             assert run.status == "failed"
             assert run.error_code == "profile_insight_evidence_invalid"
             assert session.scalar(select(ProfileInsightProposalModel)) is None
+
+
+def test_daily_profile_maintenance_runs_agent_once_and_reuses_same_input(tmp_path) -> None:
+    settings = CareerSettings(data_dir=tmp_path, mail_intelligence_mode="disabled")
+    with TestClient(create_app(settings)) as client:
+        _confirmed_fact(client)
+        analyzer = _ProfileInsightAnalyzer()
+        service = client.app.state.profile_memory_service
+        service.analyzer = analyzer
+        now = datetime(2026, 7, 29, 13, 30, tzinfo=UTC)
+
+        first = service.run_due(now=now)
+        second = service.run_due(now=now)
+
+        assert first["business_timezone"] == "Asia/Shanghai"
+        assert first["business_date"] == "2026-07-29"
+        assert first["profile_digest_generated"] == 1
+        assert first["profile_insights_created"] == 1
+        assert second["profile_insights_reused"] == 1
+        assert second["insight_ids"] == first["insight_ids"]
+        assert analyzer.calls == 1
+
+
+def test_scheduler_executes_complete_profile_maintenance_workflow(tmp_path) -> None:
+    settings = CareerSettings(data_dir=tmp_path, mail_intelligence_mode="disabled")
+    with TestClient(create_app(settings)) as client:
+        _confirmed_fact(client)
+        analyzer = _ProfileInsightAnalyzer()
+        client.app.state.profile_memory_service.analyzer = analyzer
+        configuration = client.get("/api/v1/configuration").json()
+        scheduler = {
+            **configuration["configuration"]["scheduler"],
+            "enabled": True,
+            "reminders_enabled": False,
+            "connector_jobs_enabled": False,
+            "profile_maintenance_enabled": True,
+            "profile_maintenance_time": "21:30",
+            "channel_dispatch_enabled": False,
+        }
+        configured = client.put("/api/v1/scheduler/configuration", json={
+            "expected_revision": configuration["revision"],
+            "scheduler": scheduler,
+        })
+        assert configured.status_code == 200, configured.text
+
+        now = datetime(2026, 7, 29, 13, 30, tzinfo=UTC)
+        run = client.app.state.scheduler_runtime.run_once(trigger_type="manual", now=now)
+        repeated = client.app.state.scheduler_runtime.run_once(trigger_type="manual", now=now)
+
+        assert run["counters"]["profile_digest_generated"] == 1
+        assert run["counters"]["profile_insights_created"] == 1
+        assert run["counters"]["profile_insight_failed"] == 0
+        assert repeated["counters"]["profile_jobs_processed"] == 0
+        assert analyzer.calls == 1

@@ -52,6 +52,9 @@ class SqlAlchemyConnectorGateway:
                     scan_lease_run_id=None,
                     scan_lease_expires_at=None,
                     health_status="unknown",
+                    session_status="unknown",
+                    session_identity_json="{}",
+                    session_checked_at=None,
                     last_error_code=None,
                     last_success_at=None,
                     version=1,
@@ -97,6 +100,9 @@ class SqlAlchemyConnectorGateway:
                     scan_lease_run_id=None,
                     scan_lease_expires_at=None,
                     health_status="unknown",
+                    session_status="unknown",
+                    session_identity_json="{}",
+                    session_checked_at=None,
                     last_error_code=None,
                     last_success_at=None,
                     version=1,
@@ -133,12 +139,18 @@ class SqlAlchemyConnectorGateway:
                 "health_status",
                 "last_error_code",
                 "last_success_at",
+                "session_status",
+                "session_checked_at",
             ):
                 if key in values:
                     value = values[key]
                     if key in {"enabled", "schedule_enabled"}:
                         value = int(bool(value))
                     setattr(row, key, value)
+            if "session_identity" in values:
+                row.session_identity_json = json.dumps(
+                    values["session_identity"], ensure_ascii=False, separators=(",", ":")
+                )
             if "schedule_times" in values:
                 row.schedule_times_json = json.dumps(
                     values["schedule_times"], separators=(",", ":")
@@ -171,12 +183,18 @@ class SqlAlchemyConnectorGateway:
                 "health_status",
                 "last_error_code",
                 "last_success_at",
+                "session_status",
+                "session_checked_at",
             ):
                 if key in values:
                     value = values[key]
                     if key in {"enabled", "schedule_enabled"}:
                         value = int(bool(value))
                     setattr(row, key, value)
+            if "session_identity" in values:
+                row.session_identity_json = json.dumps(
+                    values["session_identity"], ensure_ascii=False, separators=(",", ":")
+                )
             if "schedule_times" in values:
                 row.schedule_times_json = json.dumps(
                     values["schedule_times"], separators=(",", ":")
@@ -207,10 +225,11 @@ class SqlAlchemyConnectorGateway:
             return [self._run_view(row) for row in rows]
 
     def start_run(
-        self, *, trigger_type: str, connector_id: str | None = None
+        self, *, trigger_type: str, connector_id: str | None = None,
+        now: datetime | None = None,
     ) -> dict[str, Any]:
         connector_id = connector_id or BOSS_CONNECTOR_ID
-        now = datetime.now(UTC)
+        now = (now or datetime.now(UTC)).astimezone(UTC)
         self._ensure_connector(connector_id)
         with self._session_factory() as session:
             run_id = str(uuid4())
@@ -249,8 +268,10 @@ class SqlAlchemyConnectorGateway:
             session.commit()
             return self._run_view(row)
 
-    def finish_run(self, run_id: str, **counts: Any) -> dict[str, Any]:
-        now = datetime.now(UTC)
+    def finish_run(
+        self, run_id: str, *, now: datetime | None = None, **counts: Any
+    ) -> dict[str, Any]:
+        now = (now or datetime.now(UTC)).astimezone(UTC)
         with self._session_factory() as session:
             row = session.get(SyncRunModel, run_id)
             if row is None:
@@ -298,8 +319,10 @@ class SqlAlchemyConnectorGateway:
             session.commit()
             return self._run_view(row)
 
-    def fail_run(self, run_id: str, *, error_code: str) -> dict[str, Any]:
-        now = datetime.now(UTC)
+    def fail_run(
+        self, run_id: str, *, error_code: str, now: datetime | None = None
+    ) -> dict[str, Any]:
+        now = (now or datetime.now(UTC)).astimezone(UTC)
         with self._session_factory() as session:
             row = session.get(SyncRunModel, run_id)
             if row is None:
@@ -376,6 +399,14 @@ class SqlAlchemyConnectorGateway:
             row.processed_at = now
             session.commit()
 
+    def record_event_error(self, event_id: str, *, error_code: str) -> None:
+        with self._session_factory() as session:
+            row = session.get(SourceEventModel, event_id)
+            if row is None:
+                raise LookupError("来源事件不存在。")
+            row.error_code = error_code[:120]
+            session.commit()
+
     def quarantine_event(self, event_id: str, *, error_code: str) -> None:
         with self._session_factory() as session:
             row = session.get(SourceEventModel, event_id)
@@ -400,7 +431,9 @@ class SqlAlchemyConnectorGateway:
             ).all()
             return [self._event_view(row) for row in rows]
 
-    def due(self, *, connector_id: str | None = None) -> bool:
+    def due(
+        self, *, connector_id: str | None = None, now: datetime | None = None
+    ) -> bool:
         connector_id = connector_id or BOSS_CONNECTOR_ID
         config = self._ensure_connector(connector_id)
         next_at = config["next_scan_at"]
@@ -408,7 +441,7 @@ class SqlAlchemyConnectorGateway:
             config["enabled"]
             and config["schedule_enabled"]
             and next_at
-            and next_at <= datetime.now(UTC)
+            and next_at <= (now or datetime.now(UTC)).astimezone(UTC)
         )
 
     def _ensure_connector(self, connector_id: str) -> dict[str, Any]:
@@ -440,6 +473,9 @@ class SqlAlchemyConnectorGateway:
             "timezone": row.timezone,
             "next_scan_at": cls._aware(row.next_scan_at),
             "health_status": row.health_status,
+            "session_status": row.session_status,
+            "session_identity": json.loads(row.session_identity_json or "{}"),
+            "session_checked_at": cls._aware(row.session_checked_at),
             "last_error_code": row.last_error_code,
             "last_success_at": cls._aware(row.last_success_at),
             "version": row.version,

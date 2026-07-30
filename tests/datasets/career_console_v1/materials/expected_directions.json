@@ -1,0 +1,8 @@
+{
+  "directions": [
+    {"id": "direction-api", "name": "可靠 API 工程", "evidenceCount": 3},
+    {"id": "direction-data", "name": "数据质量与管道", "evidenceCount": 2}
+  ],
+  "minimum": 2,
+  "maximum": 4
+}

@@ -9,6 +9,7 @@ from pathlib import Path
 from json_repair import loads as load_json
 from pydantic import ValidationError
 
+from career_console.application.agent_tasks import CareerTaskRuntime, default_task_registry
 from career_console.domain.common.errors import CareerDomainError
 from career_console.domain.materials import MaterialReviewResult, ResumeDraftResult
 from career_console.runtime.agent.runner import AgentRunner, AgentRunSpec
@@ -17,6 +18,8 @@ from career_console.runtime.providers.base import LLMProvider
 
 
 class _ToolFreeMaterialAgent:
+    task_type: str
+
     def __init__(self, provider: LLMProvider, *, model: str | None = None) -> None:
         self.provider = provider
         self.model = model or provider.get_default_model()
@@ -25,10 +28,19 @@ class _ToolFreeMaterialAgent:
         self.last_retry_count = 0
 
     async def _run(self, *, system: str, context: dict, session_key: str, max_tokens: int) -> str:
+        assembly = CareerTaskRuntime().assemble(self.task_type, context)
+        if assembly.tools:
+            raise CareerDomainError(
+                "Material task unexpectedly received tool permissions.",
+                code="material_agent_tool_policy_invalid",
+            )
         result = await self.runner.run(AgentRunSpec(
             initial_messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": json.dumps(context, ensure_ascii=False)},
+                {"role": "system", "content": assembly.skill + "\n\n" + system},
+                {
+                    "role": "user",
+                    "content": json.dumps(assembly.context, ensure_ascii=False),
+                },
             ],
             tools=ToolRegistry(), model=self.model, max_iterations=1,
             max_tool_result_chars=1_000, max_tokens=max_tokens, temperature=0.1,
@@ -44,6 +56,9 @@ class CareerResumeDrafter(_ToolFreeMaterialAgent):
     name = "career_console_resume_drafter"
     schema_version = "resume_draft.v2"
     prompt_version = "resume_draft.v2"
+    task_type = "resume_drafting"
+    task_definition = default_task_registry.resolve(task_type)
+    skill_version = task_definition.skill_version
 
     def draft(self, *, context: dict) -> ResumeDraftResult:
         return asyncio.run(self._draft(context))
@@ -72,6 +87,9 @@ class CareerMaterialReviewer(_ToolFreeMaterialAgent):
     name = "career_console_material_reviewer"
     schema_version = "material_review.v2"
     prompt_version = "material_review.v2"
+    task_type = "material_review"
+    task_definition = default_task_registry.resolve(task_type)
+    skill_version = task_definition.skill_version
 
     def review(self, *, context: dict) -> MaterialReviewResult:
         return asyncio.run(self._review(context))

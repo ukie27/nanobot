@@ -1,0 +1,6 @@
+{
+  "wholeConfirm": {"status": "resolved", "resolution": "confirmed"},
+  "wholeReject": {"status": "resolved", "resolution": "rejected"},
+  "partial": {"status": "open"},
+  "staleVersion": {"error": "version_conflict"}
+}

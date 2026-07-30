@@ -53,7 +53,8 @@ class JobApplicationService:
         )
 
     def import_connector(
-        self, *, name: str, text: str, source_url: str, source_type: str
+        self, *, name: str, text: str, source_url: str, source_type: str,
+        opportunity_id: str | None = None,
     ) -> dict[str, Any]:
         """Import validated content from a deterministic external connector."""
         parsed = self.parser.parse_pasted_text(name=name, text=text)
@@ -62,6 +63,7 @@ class JobApplicationService:
             text=parsed.text,
             source_url=source_url,
             source_type=source_type,
+            opportunity_id=opportunity_id,
         )
 
     def import_file(

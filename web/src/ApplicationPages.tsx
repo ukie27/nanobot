@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState, type FormEvent } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 
-import { addApplicationEvent, archiveApplication, correctApplicationEvent, createApplication, getApplication, getApplicationReviewTasks, getApplications, getJobPosts, resolveApplicationProposal, submitApplication, type Application, type ApplicationEvent, type ApplicationReviewTask, type ApplicationStatus } from "./api";
+import { addApplicationEvent, archiveApplication, bindApplicationResume, correctApplicationEvent, createApplication, getApplication, getApplicationReviewTasks, getApplications, getDefaultResume, getJobPosts, resolveApplicationProposal, submitApplication, type Application, type ApplicationEvent, type ApplicationReviewTask, type ApplicationStatus } from "./api";
 import { chinaInputToIso, formatChinaTime, isoToChinaInput } from "./time";
 
 const STATUS_LABELS: Record<ApplicationStatus, string> = {
@@ -11,8 +11,8 @@ const STATUS_LABELS: Record<ApplicationStatus, string> = {
   offer: "Offer", rejected: "已拒绝", withdrawn: "已撤回", archived: "已归档",
 };
 const NEXT_STATUSES: Partial<Record<ApplicationStatus, ApplicationStatus[]>> = {
-  discovered: ["preparing_materials", "ready_to_apply", "withdrawn"],
-  preparing_materials: ["ready_to_apply", "withdrawn"],
+  discovered: ["preparing_materials", "withdrawn"],
+  preparing_materials: ["withdrawn"],
   ready_to_apply: ["submitted", "withdrawn"],
   submitted: ["application_confirmed", "assessment", "written_test", "interview", "rejected", "withdrawn"],
   application_confirmed: ["assessment", "written_test", "interview", "offer", "rejected", "withdrawn"],
@@ -52,6 +52,12 @@ const materialTypeLabel = (materialType: string) => ({
   cover_letter: "求职信",
   introduction: "自我介绍",
 }[materialType] ?? "申请材料");
+const bindingSourceLabel = (source: string) => ({
+  user: "手动选择",
+  generated: "岗位定制",
+  mail_default: "邮件默认",
+  migration: "迁移记录",
+}[source] ?? source);
 const localNow = () => isoToChinaInput();
 
 function nextAction(application: Application) {
@@ -112,9 +118,11 @@ export function ApplicationDetailPage() {
   const mailEvidence = application.mail_evidence ?? [];
   const tasksByProposal = new Map((reviewTasks.data?.items ?? []).filter(item => item.application_id === application.id).map(item => [item.id, item]));
   return <><header className="page-header job-detail-header"><div><p className="eyebrow"><Link to="/applications">申请进度</Link> / {application.company}</p><h1>{application.job_title}</h1><details><summary>查看记录版本</summary><p>岗位快照 {application.job_content_hash.slice(0, 12)} · 申请版本 {application.version}</p></details></div><span className={`health-pill ${application.current_status === "rejected" ? "blocked" : "ok"}`}>{STATUS_LABELS[application.current_status]}</span></header>
-    <section className="panel next-action-card"><div><p className="eyebrow">建议下一步</p><h2>{recommended.title}</h2><p>{recommended.detail}</p></div><div className="primary-actions"><Link className="download-button" to={recommended.to}>{recommended.label}</Link><details className="secondary-actions"><summary>其他相关内容</summary><div><Link to={`/job-posts/${application.job_post_id}`}>目标岗位</Link><Link to={`/materials?jobId=${application.job_post_id}`}>申请材料</Link><Link to={`/tasks?applicationId=${application.id}`}>任务</Link></div></details></div></section>
+    <section className="panel next-action-card"><div><p className="eyebrow">岗位与推荐分析</p><h2>{recommended.title}</h2><p>{recommended.detail}</p></div><div className="primary-actions"><Link className="download-button" to={recommended.to}>{recommended.label}</Link><details className="secondary-actions"><summary>岗位依据与相关内容</summary><div><Link to={`/job-posts/${application.job_post_id}`}>查看完整 JD 与匹配分析</Link><Link to={`/materials?jobId=${application.job_post_id}`}>申请材料</Link><Link to={`/tasks?applicationId=${application.id}`}>任务</Link></div></details></div></section>
     <section className="metric-grid"><article><span>当前状态</span><strong>{STATUS_LABELS[application.current_status]}</strong><small>根据完整申请记录更新</small></article><article><span>已投材料</span><strong>{application.material_count}</strong><small>确认投递时保存副本</small></article><article><span>进度记录</span><strong>{application.events.length}</strong><small>包含更正和历史进度</small></article><article><span>待确认进度</span><strong>{pendingProposals.length}</strong><small>确认后才会更新状态</small></article></section>
+    <ResumeBindingPanel application={application} onSaved={refresh} />
     {application.current_status === "ready_to_apply" && <div id="submission"><SubmissionPanel application={application} onSaved={refresh} /></div>}
+    <section className="panel snapshot-panel"><div className="panel-heading"><div><p className="eyebrow">投递操作</p><h2>实际投递材料快照</h2></div><span>{application.material_snapshots.length} 份</span></div>{application.material_snapshots.map((item) => <details key={item.id}><summary>{item.title} · {materialTypeLabel(item.material_type)}</summary><p>{item.rendered_text}</p><details className="audit-details"><summary>校验信息</summary><code>content {item.content_hash} · PDF {item.export_sha256 ?? "无"}</code></details></details>)}{!application.material_snapshots.length && <p>确认投递后，这里会保存绑定简历版本及其导出物的不可变快照。</p>}</section>
     {!['ready_to_apply', 'archived', 'rejected', 'withdrawn'].includes(application.current_status) && <EventPanel application={application} onSaved={refresh} />}
     <section className="panel proposal-list"><div className="panel-heading"><div><p className="eyebrow">待确认进度</p><h2>来自邮件和数据来源的候选</h2></div><span>{pendingProposals.length} 待确认</span></div>{pendingProposals.map(proposal => {
       const task = tasksByProposal.get(proposal.id);
@@ -122,24 +130,51 @@ export function ApplicationDetailPage() {
     })}{!pendingProposals.length && <p>目前没有需要确认的候选进度。</p>}{resolvedProposals.length > 0 && <details><summary>已处理候选（{resolvedProposals.length}）</summary>{resolvedProposals.map(proposal => <p className="history-row" key={proposal.id}>{STATUS_LABELS[proposal.proposed_status]} · {proposal.status === "confirmed" ? "已确认" : "已拒绝"}<small>{formatChinaTime(proposal.occurred_at)}（北京时间）</small></p>)}</details>}{resolve.error && <p className="form-error">{resolve.error.message}</p>}</section>
     <Timeline application={application} onSaved={refresh} />
     <section className="panel mail-evidence-panel"><div className="panel-heading"><div><p className="eyebrow">邮件证据</p><h2>招聘邮件证据</h2></div><span>{mailEvidence.length} 封</span></div>{mailEvidence.map(mail => <article className="mail-intelligence-item" key={mail.analysis_id}><div className="panel-heading"><strong>{mail.subject || "（无主题）"}</strong><Link to="/message-center">招聘邮件</Link></div><p>{mail.summary}</p><small>{mail.sender} · {mail.sent_at ? `${formatChinaTime(mail.sent_at)}（北京时间）` : "时间未知"} · 匹配度 {Math.round(mail.match_confidence * 100)}%</small>{mail.items.map(item => <details key={item.id}><summary>{item.title} · {item.status === "confirmed" ? "已确认" : item.status === "rejected" ? "已拒绝" : "待审核"}</summary><p>{item.details}</p><blockquote>{item.evidence}</blockquote>{(item.scheduled_at || item.occurred_at) && <time>{formatChinaTime(item.scheduled_at || item.occurred_at!)}（北京时间）</time>}</details>)}</article>)}{!mailEvidence.length && <p>尚未发现与该申请相关的招聘邮件。</p>}</section>
-    <section className="panel snapshot-panel"><div className="panel-heading"><h2>投递材料快照</h2><span>{application.material_snapshots.length} 份</span></div>{application.material_snapshots.map((item) => <details key={item.id}><summary>{item.title} · {materialTypeLabel(item.material_type)}</summary><p>{item.rendered_text}</p><details className="audit-details"><summary>校验信息</summary><code>content {item.content_hash} · PDF {item.export_sha256 ?? "无"}</code></details></details>)}{!application.material_snapshots.length && <p>确认投递时才会锁定实际使用材料。</p>}</section>
+    <section className="panel interview-context-panel"><div><p className="eyebrow">面试准备</p><h2>使用实际投递材料准备面试</h2><p>{application.material_snapshots.length ? "面试准备会读取上方已冻结的岗位版本和材料快照，不会替换为当前最新简历。" : "当前没有投递快照；确认实际投递材料后才能生成面试准备。"}</p></div><Link className="download-button secondary" to="/interviews">进入面试中心</Link></section>
     {application.current_status !== "archived" && <button className="danger archive-button" onClick={() => { if (window.confirm("归档后，该申请会从进行中流程移出，但历史记录仍保留。确认归档？")) archive.mutate(application); }} disabled={archive.isPending}>{archive.isPending ? "正在归档…" : "归档申请"}</button>}</>;
 }
 
+function ResumeBindingPanel({ application, onSaved }: { application: Application; onSaved: () => Promise<void> }) {
+  const defaultResume = useQuery({ queryKey: ["default-resume"], queryFn: getDefaultResume });
+  const bind = useMutation({
+    mutationFn: (selection: { resume_version_id?: string; use_default: boolean; reason: string }) =>
+      bindApplicationResume(application, selection),
+    onSuccess: onSaved,
+  });
+  const canReplace = ["discovered", "preparing_materials", "ready_to_apply"].includes(application.current_status);
+  const active = application.active_resume_binding;
+  const defaultVersionId = defaultResume.data?.latest_finalized_version?.id;
+  return <section className="panel resume-binding-panel">
+    <div className="panel-heading">
+      <div><p className="eyebrow">当前绑定简历</p><h2>{active ? `${active.resume_name} · v${active.version_number}` : "尚未选择实际投递简历"}</h2></div>
+      {active && <span className={`health-pill ${active.status === "locked" ? "ok" : ""}`}>{active.status === "locked" ? "已随投递锁定" : "投递前可替换"}</span>}
+    </div>
+    {active ? <div className="binding-current"><strong>{active.version_title}</strong><p>来源：{bindingSourceLabel(active.source)}{active.reason ? ` · ${active.reason}` : ""}</p><small>绑定于 {formatChinaTime(active.created_at)}（北京时间） · 具体版本 {active.resume_version_id.slice(0, 8)}</small></div> : <p>绑定必须指向一个已定稿且已验证导出的具体版本。完成绑定后，申请才会进入待投递。</p>}
+    {canReplace && <div className="binding-controls">
+      <form onSubmit={(event) => {
+        event.preventDefault();
+        const data = new FormData(event.currentTarget);
+        bind.mutate({
+          resume_version_id: String(data.get("resume_version_id")),
+          use_default: false,
+          reason: active ? "投递前更换实际使用版本" : "选择实际投递版本",
+        });
+      }}>
+        <label>选择定稿版本<select name="resume_version_id" defaultValue={active?.resume_version_id ?? ""} required><option value="" disabled>选择具体简历版本</option>{application.available_final_materials.map(item => <option value={item.resume_version_id} key={item.resume_version_id}>{item.name} · v{item.version_number} · {item.title}</option>)}</select></label>
+        <button disabled={bind.isPending || !application.available_final_materials.length}>{active ? "替换绑定版本" : "绑定此版本"}</button>
+      </form>
+      <div className="default-binding-action"><div><strong>快速使用默认简历</strong><p>{defaultResume.data && defaultVersionId ? `${defaultResume.data.name} · v${defaultResume.data.latest_finalized_version?.version_number}` : "尚未设置可用默认简历"}</p></div><button className="secondary" type="button" disabled={bind.isPending || !defaultVersionId || active?.resume_version_id === defaultVersionId} onClick={() => bind.mutate({ use_default: true, reason: "使用当前默认简历" })}>使用默认简历</button></div>
+      {!application.available_final_materials.length && <div className="notice"><strong>没有可绑定的定稿版本</strong><p>先完成材料定稿和 PDF 验证，再返回绑定。</p><Link to={`/materials?jobId=${application.job_post_id}`}>准备申请材料</Link></div>}
+      {bind.error && <p className="form-error">{bind.error.message}</p>}
+    </div>}
+    {application.resume_bindings.length > 1 && <details className="binding-history"><summary>绑定历史（{application.resume_bindings.length}）</summary>{[...application.resume_bindings].reverse().map(item => <div className="history-row" key={item.id}><strong>{item.resume_name} · v{item.version_number}</strong><small>{item.status === "replaced" ? "已替换" : item.status === "locked" ? "已锁定" : "当前使用"} · {bindingSourceLabel(item.source)} · {formatChinaTime(item.created_at)}（北京时间）</small></div>)}</details>}
+  </section>;
+}
+
 function SubmissionPanel({ application, onSaved }: { application: Application; onSaved: () => Promise<void> }) {
-  const [validationError, setValidationError] = useState("");
-  const hasFinalMaterials = application.available_final_materials.length > 0;
-  const submit = useMutation({ mutationFn: (form: HTMLFormElement) => { const data = new FormData(form); return submitApplication(application, data.getAll("material_ids").map(String), chinaInputToIso(String(data.get("occurred_at"))), String(data.get("note"))); }, onSuccess: onSaved });
-  return <section className="panel workflow-panel"><div><h2>确认已经投递</h2><p>只有你确认后才会标记为“已投递”；系统会保存本次实际使用的材料副本，便于以后核对。</p></div>{!hasFinalMaterials && <div className="notice"><strong>还没有可用于投递的定稿材料</strong><p>请先前往“简历与申请材料”生成、检查并确认定稿。</p><Link to={`/materials?jobId=${application.job_post_id}`}>准备并定稿材料</Link></div>}<form onSubmit={(event) => {
-    event.preventDefault();
-    const selectedMaterials = new FormData(event.currentTarget).getAll("material_ids");
-    if (!selectedMaterials.length) {
-      setValidationError(hasFinalMaterials ? "请至少选择一份定稿材料。" : "");
-      return;
-    }
-    setValidationError("");
-    submit.mutate(event.currentTarget);
-  }}><div className="material-choices">{application.available_final_materials.map((item) => <label key={item.id}><input type="checkbox" name="material_ids" value={item.id} onChange={() => setValidationError("")} /> {item.name} · {materialTypeLabel(item.material_type)}</label>)}</div><label>实际投递时间（北京时间）<input name="occurred_at" type="datetime-local" defaultValue={localNow()} required /></label><label>备注<input name="note" defaultValue="官网提交" /></label><button disabled={submit.isPending || !hasFinalMaterials}>确认投递并保存材料</button>{validationError && <p className="form-error">{validationError}</p>}{submit.error && <p className="form-error">{submit.error.message}</p>}</form></section>;
+  const binding = application.active_resume_binding;
+  const submit = useMutation({ mutationFn: (form: HTMLFormElement) => { const data = new FormData(form); return submitApplication(application, String(binding?.resume_version_id), chinaInputToIso(String(data.get("occurred_at"))), String(data.get("note"))); }, onSuccess: onSaved });
+  return <section className="panel workflow-panel"><div><p className="eyebrow">投递操作</p><h2>确认已经投递</h2><p>请再次核对实际使用的具体简历版本。确认后，绑定和导出物会形成不可变快照。</p></div>{binding ? <form onSubmit={(event) => { event.preventDefault(); submit.mutate(event.currentTarget); }}><div className="submission-resume-confirmation"><span>本次投递简历</span><strong>{binding.resume_name} · v{binding.version_number}</strong><small>{binding.version_title}</small></div><label>实际投递时间（北京时间）<input name="occurred_at" type="datetime-local" defaultValue={localNow()} required /></label><label>备注<input name="note" defaultValue="官网提交" /></label><button disabled={submit.isPending}>{submit.isPending ? "正在锁定投递快照…" : "确认投递并锁定此版本"}</button>{submit.error && <p className="form-error">{submit.error.message}</p>}</form> : <div className="notice"><strong>尚未绑定简历</strong><p>请先在上方选择实际投递的定稿版本。</p></div>}</section>;
 }
 
 function EventPanel({ application, onSaved }: { application: Application; onSaved: () => Promise<void> }) {

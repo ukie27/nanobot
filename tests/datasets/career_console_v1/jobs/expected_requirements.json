@@ -1,0 +1,11 @@
+{
+  "backendJunior": {
+    "hardGates": ["2027 届", "本科及以上"],
+    "skills": ["Python", "SQL", "自动化测试"],
+    "expectedFit": "high"
+  },
+  "hardGateFailed": {
+    "hardGates": ["五年以上全职经验", "硕士学位"],
+    "expectedFit": "not_eligible"
+  }
+}

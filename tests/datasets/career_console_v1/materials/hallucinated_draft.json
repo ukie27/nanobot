@@ -1,0 +1,10 @@
+{
+  "directionId": "direction-api",
+  "bullets": [
+    {
+      "text": "带领二十人团队实现千万级日活系统。",
+      "factReferences": ["fact-missing-999"]
+    }
+  ],
+  "expectedStatus": "blocked"
+}

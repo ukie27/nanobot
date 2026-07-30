@@ -1,0 +1,9 @@
+task_type: profile_fact_extraction
+skill_version: v2
+checks:
+  - output_matches_schema
+  - evidence_is_exact_input_substring
+  - one_complete_business_object_per_experience
+  - skills_are_not_split_into_individual_objects
+  - no_tool_calls
+  - no_unsupported_inference

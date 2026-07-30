@@ -24,8 +24,7 @@ class LocalBrowserSecurityMiddleware(BaseHTTPMiddleware):
                 status_code=403,
             )
         if (
-            origin
-            and request.method in {"POST", "PUT", "PATCH", "DELETE"}
+            request.method in {"POST", "PUT", "PATCH", "DELETE"}
             and request.url.path != "/api/v1/system/session"
         ):
             cookie = request.cookies.get("career_session", "")

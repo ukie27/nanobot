@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "MailIntelligenceInput",
+  "type": "object",
+  "required": ["message", "candidate_applications", "business_timezone"],
+  "properties": {
+    "message": {"type": "object"},
+    "candidate_applications": {"type": "array", "items": {"type": "object"}},
+    "business_timezone": {"const": "Asia/Shanghai"}
+  },
+  "additionalProperties": false
+}

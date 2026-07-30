@@ -30,6 +30,26 @@ def _fake_chat_response(content: str = "ok") -> SimpleNamespace:
     return SimpleNamespace(choices=[choice], usage=usage)
 
 
+def test_openai_compat_sanitizes_authentication_error() -> None:
+    class AuthenticationError(Exception):
+        status_code = 401
+        body = {
+            "error": {
+                "type": "authentication_error",
+                "code": "invalid_request_error",
+                "message": "sensitive provider detail",
+            }
+        }
+        response = SimpleNamespace(status_code=401, headers={})
+
+    response = OpenAICompatProvider._handle_error(AuthenticationError())
+
+    assert response.finish_reason == "error"
+    assert response.error_code == "provider_authentication_failed"
+    assert response.content == "Error calling LLM: authentication failed."
+    assert "sensitive provider detail" not in response.content
+
+
 def _fake_tool_call_response() -> SimpleNamespace:
     """Build a minimal chat response that includes Gemini-style extra_content."""
     function = SimpleNamespace(
