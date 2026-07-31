@@ -9,7 +9,7 @@ import { InterviewCenterPage, InterviewDetailPage } from "./InterviewPages";
 import { MaterialDetailPage, MaterialsPage, ResumeDiffPage } from "./MaterialPages";
 import { MessageCenterPage } from "./MailPages";
 import { OpportunityPage } from "./OpportunityPages";
-import { DocumentsPage, ProfilePage } from "./ProfilePages";
+import { DocumentsPage, ManualFactPage, ProfilePage } from "./ProfilePages";
 import { DashboardPage, TasksPage } from "./TaskPages";
 import { formatChinaTime } from "./time";
 import { DataSourcesPage } from "./ConnectorPages";
@@ -51,11 +51,13 @@ function NavigationGroup({ label, paths, children, onNavigate }: NavigationGroup
 
 function ProductLayout() {
   const [mobileNavigationOpen, setMobileNavigationOpen] = useState(false);
+  const location = useLocation();
+  const profileSubpage = location.pathname.startsWith("/profile/");
   const closeNavigation = () => setMobileNavigationOpen(false);
   return (
-    <div className="app-shell">
+    <div className={`app-shell ${profileSubpage ? "profile-subpage-shell" : ""}`}>
       <a className="skip-link" href="#main-content">跳到主要内容</a>
-      <header className="mobile-header">
+      {!profileSubpage && <header className="mobile-header">
         <Brand />
         <button
           type="button"
@@ -66,9 +68,13 @@ function ProductLayout() {
         >
           {mobileNavigationOpen ? "关闭" : "菜单"}
         </button>
-      </header>
-      {mobileNavigationOpen && <button className="sidebar-backdrop" aria-label="关闭导航" onClick={closeNavigation} />}
-      <aside id="primary-sidebar" className={`sidebar ${mobileNavigationOpen ? "mobile-open" : ""}`}>
+      </header>}
+      {profileSubpage && <header className="profile-subpage-header">
+        <Brand />
+        <NavLink className="back-link" end to="/profile">返回我的资料</NavLink>
+      </header>}
+      {!profileSubpage && mobileNavigationOpen && <button className="sidebar-backdrop" aria-label="关闭导航" onClick={closeNavigation} />}
+      {!profileSubpage && <aside id="primary-sidebar" className={`sidebar ${mobileNavigationOpen ? "mobile-open" : ""}`}>
         <div className="desktop-brand"><Brand /></div>
         <p className="navigation-intro">按求职任务组织功能。当前要做什么，就从对应分组进入。</p>
         <nav aria-label="主导航">
@@ -83,10 +89,9 @@ function ProductLayout() {
             <NavLink to="/tasks">任务与日程</NavLink>
             <NavLink to="/interviews">面试中心</NavLink>
           </NavigationGroup>
-          <NavigationGroup label="我的资料" paths={["/profile", "/materials", "/documents"]} onNavigate={closeNavigation}>
+          <NavigationGroup label="我的资料" paths={["/profile", "/materials"]} onNavigate={closeNavigation}>
             <NavLink to="/profile">我的经历</NavLink>
             <NavLink to="/materials">简历与申请材料</NavLink>
-            <NavLink to="/documents">导入资料</NavLink>
           </NavigationGroup>
           <NavigationGroup label="消息与确认" paths={["/message-center", "/reviews"]} onNavigate={closeNavigation}>
             <NavLink to="/message-center">招聘邮件</NavLink>
@@ -95,14 +100,17 @@ function ProductLayout() {
           <NavLink to="/settings" onClick={closeNavigation}>设置</NavLink>
           <NavLink to="/help" onClick={closeNavigation}>帮助</NavLink>
         </nav>
-      </aside>
-      <main className="content" id="main-content" tabIndex={-1}>
+      </aside>}
+      <main className={`content ${profileSubpage ? "profile-subpage-content" : ""}`} id="main-content" tabIndex={-1}>
         <Routes>
           <Route path="/" element={<Navigate to="/dashboard" replace />} />
           <Route path="/dashboard" element={<DashboardPage />} />
           <Route path="/workspace" element={<WorkspacePage />} />
           <Route path="/profile" element={<ProfilePage />} />
-          <Route path="/documents" element={<DocumentsPage />} />
+          <Route path="/profile/import" element={<DocumentsPage />} />
+          <Route path="/profile/reviews" element={<ReviewCenterPage profileOnly />} />
+          <Route path="/profile/manual" element={<ManualFactPage />} />
+          <Route path="/documents" element={<Navigate to="/profile/import" replace />} />
           <Route path="/review" element={<Navigate to="/reviews?category=profile" replace />} />
           <Route path="/reviews" element={<ReviewCenterPage />} />
           <Route path="/reviews/:id" element={<ReviewBundlePage />} />

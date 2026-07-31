@@ -236,7 +236,7 @@ function ProfileBundleReview({
   </div>;
 }
 
-export function ReviewCenterPage() {
+export function ReviewCenterPage({ profileOnly = false }: { profileOnly?: boolean }) {
   const client = useQueryClient();
   const [status, setStatus] = useState("open");
   const [expandedBundles, setExpandedBundles] = useState<Set<string>>(new Set());
@@ -276,12 +276,16 @@ export function ReviewCenterPage() {
       ]);
     },
   });
+  const visibleItems = (query.data?.items ?? []).filter(item => !profileOnly || (
+    (item.entity_type === "review_bundle" && item.bundle_type === "profile_section")
+    || item.entity_type === "candidate_fact"
+  ));
   return <>
-    <header className="page-header"><div><p className="eyebrow">待我确认</p><h1>审查中心</h1></div><span className="health-pill">{query.data?.total ?? 0} 项</span></header>
+    <header className="page-header"><div><p className="eyebrow">{profileOnly ? "我的资料 / 内容确认" : "待我确认"}</p><h1>{profileOnly ? "确认档案内容" : "审查中心"}</h1></div><span className="health-pill">{visibleItems.length} 项</span></header>
     <section className="notice opportunity-note"><strong>智能分析只会生成待确认建议</strong><p>职业事实可直接在本页展开核对；只有你确认后，内容才会写入正式记录。</p></section>
     <div className="opportunity-filters"><button className={status === "open" ? "" : "secondary"} onClick={() => setStatus("open")}>待处理</button><button className={status === "resolved" ? "" : "secondary"} onClick={() => setStatus("resolved")}>已处理</button></div>
     {(query.error || facts.error || resolve.error) && <section className="notice error">{query.error?.message ?? facts.error?.message ?? resolve.error?.message}</section>}
-    <section className="review-runtime-list">{query.data?.items.map((item) => {
+    <section className="review-runtime-list">{visibleItems.map((item) => {
       const isProfileBundle = item.entity_type === "review_bundle" && item.bundle_type === "profile_section";
       const expanded = expandedBundles.has(item.id);
       return <article className={`panel review-runtime-card ${expanded ? "expanded" : ""}`} key={item.id}>
@@ -315,7 +319,7 @@ export function ReviewCenterPage() {
         />}
       </article>;
     })}</section>
-    {!query.isLoading && !query.data?.total && <section className="empty-state"><h2>{status === "open" ? "没有待审事项" : "没有已处理记录"}</h2><p>所有正式变化都保留业务事件和审查结果。</p></section>}
+    {!query.isLoading && !visibleItems.length && <section className="empty-state"><h2>{status === "open" ? "没有待审事项" : "没有已处理记录"}</h2><p>{profileOnly ? "导入资料或手动补充经历后，需要确认的档案内容会出现在这里。" : "所有正式变化都保留业务事件和审查结果。"}</p></section>}
   </>;
 }
 

@@ -271,23 +271,91 @@ describe("Career app shell", () => {
           created_at: "2026-07-23T00:00:00Z", updated_at: "2026-07-23T00:00:00Z",
         }) });
       }
+      if (input === "/api/v1/profile-memory") {
+        return Promise.resolve({ ok: true, json: async () => ({
+          preferences: [], insights: [], strategies: [], digests: [], changes: [], impact_runs: [],
+        }) });
+      }
       return Promise.resolve({ ok: true, json: async () => ({
         total: 1, items: [{ id: "fact", profile_id: "profile", category: "skill",
           field_key: "skill", value: "Python", status: "confirmed", confidence: 0.9,
-          version: 2, sources: [], revisions: [], created_at: "2026-07-23T00:00:00Z",
+          version: 2, sources: [{ id: "source", document_id: "document", evidence_text: "技能：Python",
+            locator: null, created_at: "2026-07-23T00:00:00Z" }], revisions: [],
+          created_at: "2026-07-23T00:00:00Z",
           updated_at: "2026-07-23T00:00:00Z" }],
       }) });
     }));
     renderApp("/profile");
     expect(await screen.findByRole("heading", { name: "张三" })).toBeInTheDocument();
     expect(screen.getByText("Python")).toBeInTheDocument();
-    expect(screen.getByText("可用于正式内容")).toBeInTheDocument();
+    expect(screen.getByText("可用于正式业务")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /职业档案/ })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("button", { name: /求职偏好/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /洞察与策略/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /档案维护/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /导入简历或经历资料/ })).toHaveAttribute("href", "/profile/import");
+    expect(screen.getByRole("link", { name: /处理 Agent 提取结果/ })).toHaveAttribute("href", "/profile/reviews");
+    expect(screen.getByRole("link", { name: /手动添加一段经历/ })).toHaveAttribute("href", "/profile/manual");
     expect(screen.queryByText("skill · v2")).not.toBeInTheDocument();
-    const factRecord = screen.getByText("查看来源与记录").closest("details");
+    const factRecord = screen.getByText(/查看来源与记录/).closest("details");
     expect(factRecord).not.toHaveAttribute("open");
-    fireEvent.click(screen.getByText("查看来源与记录"));
+    expect(screen.getByText("技能：Python")).not.toBeVisible();
+    fireEvent.click(screen.getByText(/查看来源与记录/));
     expect(factRecord).toHaveAttribute("open");
     expect(screen.getByText("记录字段：skill · 版本 2")).toBeInTheDocument();
+    expect(screen.getByText("技能：Python")).toBeInTheDocument();
+    expect(factRecord).toHaveClass("profile-fact-evidence");
+    expect(factRecord?.parentElement).toHaveClass("profile-fact-row");
+  });
+
+  it("switches the preference editor to the selected preference content", async () => {
+    let preferences = [{
+      id: "preference-role", preference_key: "target_roles", value: ["后端工程"],
+      status: "confirmed", version: 1, created_at: "2026-07-23T00:00:00Z",
+      updated_at: "2026-07-23T00:00:00Z",
+    }];
+    const fetchMock = vi.fn().mockImplementation((input: string, init?: RequestInit) => {
+      if (input === "/api/v1/system/session") {
+        return Promise.resolve({ ok: true, json: async () => ({ csrf_token: "test-token" }) });
+      }
+      if (input === "/api/v1/profile") {
+        return Promise.resolve({ ok: true, json: async () => ({
+          id: "profile", display_name: "张三", timezone: "Asia/Shanghai", version: 2,
+          fact_counts: { proposed: 0, confirmed: 0, rejected: 0 },
+          created_at: "2026-07-23T00:00:00Z", updated_at: "2026-07-23T00:00:00Z",
+        }) });
+      }
+      if (input === "/api/v1/profile-memory") {
+        return Promise.resolve({ ok: true, json: async () => ({
+          preferences, insights: [], strategies: [], digests: [], changes: [], impact_runs: [],
+        }) });
+      }
+      if (input === "/api/v1/profile-memory/preferences/target_roles" && init?.method === "PUT") {
+        const body = JSON.parse(String(init.body));
+        preferences = [{ ...preferences[0], value: body.value, version: 2 }];
+        return Promise.resolve({ ok: true, json: async () => preferences[0] });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ total: 0, items: [] }) });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderApp("/profile");
+
+    fireEvent.click(await screen.findByRole("button", { name: /求职偏好/ }));
+    const type = await screen.findByLabelText("偏好类型");
+    const content = screen.getByLabelText("内容（逗号分隔）");
+    expect(content).toHaveValue("后端工程");
+
+    fireEvent.change(content, { target: { value: "后端工程、AI 应用" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存求职偏好" }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/profile-memory/preferences/target_roles",
+      expect.objectContaining({ method: "PUT" }),
+    ));
+
+    fireEvent.change(type, { target: { value: "target_cities" } });
+    expect(content).toHaveValue("");
+    fireEvent.change(type, { target: { value: "target_roles" } });
+    expect(content).toHaveValue("后端工程、AI 应用");
   });
 
   it("keeps document processing metadata behind a user-facing disclosure", async () => {
@@ -308,6 +376,8 @@ describe("Career app shell", () => {
     }));
     renderApp("/documents");
     expect(await screen.findByRole("heading", { name: "导入资料" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "返回我的资料" })).toHaveAttribute("href", "/profile");
+    expect(screen.queryByRole("navigation", { name: "主导航" })).not.toBeInTheDocument();
     expect(screen.getByLabelText("选择文件并导入")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "导入记录" })).toBeInTheDocument();
     expect(await screen.findByText("1 份可用 · 1 份未完成")).toBeInTheDocument();
@@ -368,7 +438,9 @@ describe("Career app shell", () => {
       }),
     });
 
-    expect(await screen.findByRole("heading", { name: "审查中心" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "确认档案内容" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "返回我的资料" })).toHaveAttribute("href", "/profile");
+    expect(screen.queryByRole("navigation", { name: "主导航" })).not.toBeInTheDocument();
   });
 
   it("keeps the import page open and links to AI settings on credential failure", async () => {
