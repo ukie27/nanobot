@@ -62,7 +62,7 @@ const localNow = () => isoToChinaInput();
 
 function nextAction(application: Application) {
   if (["discovered", "preparing_materials"].includes(application.current_status)) {
-    return { title: "准备申请材料", detail: "先完成针对该岗位的材料，再进入投递确认。", to: `/materials?jobId=${application.job_post_id}`, label: "准备材料" };
+    return { title: "准备申请材料", detail: "先完成针对该岗位的材料，再进入投递确认。", to: `/job-posts/${application.job_post_id}/materials`, label: "准备材料" };
   }
   if (application.current_status === "ready_to_apply") {
     return { title: "确认实际投递", detail: "核对并锁定实际使用的定稿材料，然后记录投递时间。", to: "#submission", label: "前往投递确认" };
@@ -118,7 +118,7 @@ export function ApplicationDetailPage() {
   const mailEvidence = application.mail_evidence ?? [];
   const tasksByProposal = new Map((reviewTasks.data?.items ?? []).filter(item => item.application_id === application.id).map(item => [item.id, item]));
   return <><header className="page-header job-detail-header"><div><p className="eyebrow"><Link to="/applications">申请进度</Link> / {application.company}</p><h1>{application.job_title}</h1><details><summary>查看记录版本</summary><p>岗位快照 {application.job_content_hash.slice(0, 12)} · 申请版本 {application.version}</p></details></div><span className={`health-pill ${application.current_status === "rejected" ? "blocked" : "ok"}`}>{STATUS_LABELS[application.current_status]}</span></header>
-    <section className="panel next-action-card"><div><p className="eyebrow">岗位与推荐分析</p><h2>{recommended.title}</h2><p>{recommended.detail}</p></div><div className="primary-actions"><Link className="download-button" to={recommended.to}>{recommended.label}</Link><details className="secondary-actions"><summary>岗位依据与相关内容</summary><div><Link to={`/job-posts/${application.job_post_id}`}>查看完整 JD 与匹配分析</Link><Link to={`/materials?jobId=${application.job_post_id}`}>申请材料</Link><Link to={`/tasks?applicationId=${application.id}`}>任务</Link></div></details></div></section>
+    <section className="panel next-action-card"><div><p className="eyebrow">岗位与推荐分析</p><h2>{recommended.title}</h2><p>{recommended.detail}</p></div><div className="primary-actions"><Link className="download-button" to={recommended.to}>{recommended.label}</Link><details className="secondary-actions"><summary>岗位依据与相关内容</summary><div><Link to={`/job-posts/${application.job_post_id}`}>查看完整 JD 与匹配分析</Link><Link to={`/job-posts/${application.job_post_id}/materials`}>申请材料</Link><Link to={`/tasks?applicationId=${application.id}`}>任务</Link></div></details></div></section>
     <section className="metric-grid"><article><span>当前状态</span><strong>{STATUS_LABELS[application.current_status]}</strong><small>根据完整申请记录更新</small></article><article><span>已投材料</span><strong>{application.material_count}</strong><small>确认投递时保存副本</small></article><article><span>进度记录</span><strong>{application.events.length}</strong><small>包含更正和历史进度</small></article><article><span>待确认进度</span><strong>{pendingProposals.length}</strong><small>确认后才会更新状态</small></article></section>
     <ResumeBindingPanel application={application} onSaved={refresh} />
     {application.current_status === "ready_to_apply" && <div id="submission"><SubmissionPanel application={application} onSaved={refresh} /></div>}
@@ -164,7 +164,7 @@ function ResumeBindingPanel({ application, onSaved }: { application: Application
         <button disabled={bind.isPending || !application.available_final_materials.length}>{active ? "替换绑定版本" : "绑定此版本"}</button>
       </form>
       <div className="default-binding-action"><div><strong>快速使用默认简历</strong><p>{defaultResume.data && defaultVersionId ? `${defaultResume.data.name} · v${defaultResume.data.latest_finalized_version?.version_number}` : "尚未设置可用默认简历"}</p></div><button className="secondary" type="button" disabled={bind.isPending || !defaultVersionId || active?.resume_version_id === defaultVersionId} onClick={() => bind.mutate({ use_default: true, reason: "使用当前默认简历" })}>使用默认简历</button></div>
-      {!application.available_final_materials.length && <div className="notice"><strong>没有可绑定的定稿版本</strong><p>先完成材料定稿和 PDF 验证，再返回绑定。</p><Link to={`/materials?jobId=${application.job_post_id}`}>准备申请材料</Link></div>}
+      {!application.available_final_materials.length && <div className="notice"><strong>没有可绑定的定稿版本</strong><p>先完成材料定稿和 PDF 验证，再返回绑定。</p><Link to={`/job-posts/${application.job_post_id}/materials`}>准备申请材料</Link></div>}
       {bind.error && <p className="form-error">{bind.error.message}</p>}
     </div>}
     {application.resume_bindings.length > 1 && <details className="binding-history"><summary>绑定历史（{application.resume_bindings.length}）</summary>{[...application.resume_bindings].reverse().map(item => <div className="history-row" key={item.id}><strong>{item.resume_name} · v{item.version_number}</strong><small>{item.status === "replaced" ? "已替换" : item.status === "locked" ? "已锁定" : "当前使用"} · {bindingSourceLabel(item.source)} · {formatChinaTime(item.created_at)}（北京时间）</small></div>)}</details>}

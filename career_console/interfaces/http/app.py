@@ -15,7 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from career_console import __version__
-from career_console.application.ports import FactExtractor
+from career_console.application.ports import FactExtractor, ProfileFactReviser
 from career_console.application.services import (
     CareerApplicationService,
     ConnectorApplicationService,
@@ -34,6 +34,7 @@ from career_console.application.services import (
     ProfileMemoryApplicationService,
     ResumeDirectionApplicationService,
     RuntimeApplicationService,
+    StandaloneResumeApplicationService,
     TaskApplicationService,
 )
 from career_console.infrastructure.agent_runtime import CareerAgentRuntime
@@ -94,6 +95,9 @@ from career_console.infrastructure.database.resume_direction_gateway import (
     SqlAlchemyResumeDirectionGateway,
 )
 from career_console.infrastructure.database.runtime_gateway import SqlAlchemyRuntimeGateway
+from career_console.infrastructure.database.standalone_resume_gateway import (
+    SqlAlchemyStandaloneResumeGateway,
+)
 from career_console.infrastructure.database.task_gateway import SqlAlchemyTaskGateway
 from career_console.infrastructure.extraction import LocalJobExtractor
 from career_console.infrastructure.files import (
@@ -146,6 +150,7 @@ def create_app(
     settings: CareerSettings | None = None,
     *,
     fact_extractor: FactExtractor | None = None,
+    fact_reviser: ProfileFactReviser | None = None,
 ) -> FastAPI:
     settings = settings or CareerSettings()
     settings = apply_stored_runtime_configuration(settings)
@@ -182,6 +187,7 @@ def create_app(
             parser=DocumentParser(max_bytes=settings.max_document_bytes),
             blob_store=LocalBlobStore(settings.blobs_dir),
             extractor=fact_extractor or _create_fact_extractor(agent_runtime),
+            reviser=fact_reviser or _create_fact_reviser(agent_runtime),
         )
         job_gateway = SqlAlchemyJobGateway(database.session_factory)
         job_service = JobApplicationService(
@@ -206,12 +212,16 @@ def create_app(
             exports_dir=settings.exports_dir,
             pdf_exporter=VerifiedPdfExporter(),
         )
-        material_drafter, material_reviewer = _create_material_agents(
+        material_drafter, material_reviewer, standalone_resume_drafter = _create_material_agents(
             settings, agent_runtime
         )
         material_agent_service = MaterialAgentApplicationService(
             SqlAlchemyMaterialAgentGateway(database.session_factory),
             material_drafter, material_reviewer,
+        )
+        standalone_resume_service = StandaloneResumeApplicationService(
+            SqlAlchemyStandaloneResumeGateway(database.session_factory),
+            standalone_resume_drafter,
         )
         application_gateway = SqlAlchemyApplicationGateway(database.session_factory)
         task_gateway = SqlAlchemyTaskGateway(database.session_factory)
@@ -328,6 +338,7 @@ def create_app(
         app.state.material_gateway = material_gateway
         app.state.material_service = MaterialApplicationService(material_gateway)
         app.state.material_agent_service = material_agent_service
+        app.state.standalone_resume_service = standalone_resume_service
         app.state.application_gateway = application_gateway
         app.state.application_service = CareerApplicationService(application_gateway)
         app.state.task_gateway = task_gateway
@@ -509,6 +520,14 @@ def _create_profile_insight_analyzer(
         return None
 
 
+def _create_fact_reviser(runtime: CareerAgentRuntime):
+    from career_console.infrastructure.agents import RuntimeConfiguredProfileFactReviser
+
+    return RuntimeConfiguredProfileFactReviser(
+        lambda: runtime.resolve("profile_revision")
+    )
+
+
 def _create_job_fit_analyzer(settings: CareerSettings, runtime: CareerAgentRuntime):
     if settings.job_fit_agent_mode == "disabled":
         return None
@@ -555,17 +574,26 @@ def _create_resume_direction_analyzer(
 
 def _create_material_agents(settings: CareerSettings, runtime: CareerAgentRuntime):
     if settings.material_agent_mode == "disabled":
-        return None, None
+        return None, None, None
     try:
-        from career_console.infrastructure.agents import CareerMaterialReviewer, CareerResumeDrafter
+        from career_console.infrastructure.agents import (
+            CareerMaterialReviewer,
+            CareerResumeDrafter,
+            CareerStandaloneResumeDrafter,
+        )
         drafter = runtime.resolve("resume_drafting")
         reviewer = runtime.resolve("material_review")
         return (
             CareerResumeDrafter(drafter.provider, model=drafter.model) if drafter else None,
             CareerMaterialReviewer(reviewer.provider, model=reviewer.model) if reviewer else None,
+            (
+                CareerStandaloneResumeDrafter(drafter.provider, model=drafter.model)
+                if drafter
+                else None
+            ),
         )
     except (RuntimeError, ValueError):
-        return None, None
+        return None, None, None
 
 
 async def _scheduler_loop(

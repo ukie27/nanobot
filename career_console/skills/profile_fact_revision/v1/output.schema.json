@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ProfileFactRevisionOutput",
+  "type": "object",
+  "required": ["schemaVersion", "objectKey", "content", "rationale"],
+  "properties": {
+    "schemaVersion": {"const": "profile_fact_revision.v1"},
+    "objectKey": {"type": "string", "minLength": 1, "maxLength": 100},
+    "content": {"type": "string", "minLength": 1, "maxLength": 10000},
+    "rationale": {"type": "string", "minLength": 1, "maxLength": 500}
+  },
+  "additionalProperties": false
+}

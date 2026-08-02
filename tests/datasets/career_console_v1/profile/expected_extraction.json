@@ -1,5 +1,5 @@
 {
-  "schemaVersion": "candidate_profile_object.v2",
+  "schemaVersion": "candidate_profile_object.v3",
   "expectedSections": ["basic", "education", "project", "skill"],
   "expectedProjectCount": 2,
   "conflicts": [

@@ -86,6 +86,22 @@ def test_instance_lock_rejects_second_server(tmp_path: Path) -> None:
     second.release()
 
 
+def test_instance_lock_normalizes_windows_permission_error(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    path = tmp_path / "runtime" / "career.lock"
+    path.parent.mkdir(parents=True)
+    path.touch()
+    lock = CareerInstanceLock(path)
+
+    def denied(*_args, **_kwargs):
+        raise PermissionError(13, "access denied", str(path))
+
+    monkeypatch.setattr(lock._lock, "acquire", denied)
+    with pytest.raises(InstanceAlreadyRunningError):
+        lock.acquire()
+
+
 def test_expired_job_lease_is_recovered(tmp_path: Path) -> None:
     settings = settings_at(tmp_path / "career")
     upgrade_to_head(settings)

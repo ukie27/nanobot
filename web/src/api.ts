@@ -103,8 +103,10 @@ export interface CareerConsoleConfiguration {
     send_max_retries: number;
   };
   scheduler: { enabled: boolean; poll_seconds: number; reminders_enabled: boolean;
-    connector_jobs_enabled: boolean; profile_maintenance_enabled: boolean;
-    profile_maintenance_time: string; channel_dispatch_enabled: boolean };
+    connector_jobs_enabled: boolean; nowcoder_sync_enabled: boolean;
+    mail_sync_enabled: boolean; profile_maintenance_enabled: boolean;
+    profile_maintenance_interval_days: number; profile_maintenance_time: string;
+    channel_dispatch_enabled: boolean };
 }
 
 export type ProviderType = "custom" | "azure_openai" | "anthropic" | "openai" |
@@ -127,7 +129,7 @@ export interface AgentTaskConfiguration {
   temperature: number; max_tokens: number;
   reasoning_effort: "low" | "medium" | "high" | null;
 }
-export type AgentTaskName = "fact_extraction" | "mail_intelligence" | "profile_insight" |
+export type AgentTaskName = "fact_extraction" | "profile_revision" | "mail_intelligence" | "profile_insight" |
   "job_fit" | "resume_direction" | "resume_drafting" | "material_review" |
   "daily_job_recommendation";
 export interface AgentConfiguration { tasks: Record<AgentTaskName, AgentTaskConfiguration> }
@@ -279,7 +281,7 @@ export interface FactList { items: CandidateFact[]; total: number }
 
 export interface ProfileMemory {
   preferences: Array<{ id: string; preference_key: string; value: unknown; status: string; version: number; created_at: string; updated_at: string }>;
-  insights: Array<{ id: string; insight_type: string; conclusion: string; evidence_refs: string[]; counter_evidence: string[]; confidence: number; source: string; status: string; version: number; agent_run_id: string | null; review_task_id: string | null; resolution_reason: string | null; created_at: string; resolved_at: string | null }>;
+  insights: Array<{ id: string; category: "interview" | "application" | "resume" | "learning" | "career_direction"; analysis: string; recommendation: string; evidence_refs: string[]; evidence_fact_ids: string[]; evidence_improvement_ids: string[]; counter_evidence: string[]; confidence: number; source: string; status: string; version: number; agent_run_id: string | null; review_task_id: string | null; resolution_reason: string | null; created_at: string; resolved_at: string | null }>;
   strategies: Array<{ id: string; version_number: number; schema_version: string; period_start: string; period_end: string; content: { target_directions: unknown; priority_locations: unknown; constraints: unknown; application_count: number; confirmed_fact_count: number; actions: string[]; evaluation_period_days: number }; evidence_refs: string[]; status: string; version: number; review_task_id: string | null; resolution_reason: string | null; created_at: string; resolved_at: string | null }>;
   digests: Array<{ id: string; digest_date: string; schema_version: string; content: { changes: unknown[]; application_changes: unknown[]; pending_review_count: number; risks: string[]; tomorrow_actions: Array<{ task_id: string; title: string; due_at: string }> }; input_hash: string; generated_at: string }>;
   changes: Array<{ id: string; event_type: string; entity_type: string; entity_id: string; entity_revision: number; changed_fields: Record<string, unknown>; impact_scopes: string[]; source: string; occurred_at: string }>;
@@ -298,7 +300,9 @@ export interface ImportedDocument {
   fact_source_count: number;
   duplicate: boolean;
   proposed_fact_count: number | null;
+  maintained_fact_count: number | null;
   extracted_candidate_count: number | null;
+  superseded_fact_count: number | null;
   created_at: string;
 }
 
@@ -439,6 +443,44 @@ export interface ResumeSeries {
   created_at: string; updated_at: string;
 }
 export interface ResumeSeriesList { items: ResumeSeries[]; total: number }
+export interface ResumeDetail extends ResumeSeries {
+  current_version: MaterialVersion & { rendered_text: string; blocks: MaterialBlock[] };
+  versions: MaterialVersion[];
+  review: MaterialReview | null;
+  export: MaterialExport | null;
+}
+export interface StandaloneResumeProposal {
+  id: string;
+  resume_name: string;
+  user_prompt: string;
+  fact_set_hash: string;
+  schema_version: "resume_draft.v2";
+  content: {
+    schemaVersion: "resume_draft.v2";
+    title: string;
+    rationale: string;
+    blocks: Array<{
+      blockId: string;
+      section: string;
+      text: string;
+      factIds: string[];
+      requirementIds: string[];
+    }>;
+  };
+  status: "proposed" | "confirmed" | "rejected";
+  version: number;
+  drafter_run_id: string;
+  review_task_id: string | null;
+  resume_id: string | null;
+  resume_version_id: string | null;
+  resolution_reason: string | null;
+  created_at: string;
+  resolved_at: string | null;
+}
+export interface StandaloneResumeProposalList {
+  items: StandaloneResumeProposal[];
+  total: number;
+}
 export interface ResumeVersionDiff {
   from_version: MaterialVersion; to_version: MaterialVersion;
   summary: { added: number; removed: number; changed: number; unchanged: number };
@@ -915,7 +957,7 @@ export const resolveUnifiedReviewBundle = (
   resolution: "confirmed" | "rejected",
 ) => sendJson<UnifiedReviewTask>(
   `/api/v1/runtime/reviews/${encodeURIComponent(review.id)}/resolve`,
-  { expected_version: review.version, resolution, reason: "用户在确认中心整组处理" },
+  { expected_version: review.version, resolution, reason: "用户在待我处理整组处理" },
 );
 export const getAgentRuns = () =>
   getJson<{ items: AgentRunAudit[]; total: number }>("/api/v1/runtime/agent-runs");
@@ -937,8 +979,6 @@ export const generateDailyDigest = () => sendJson<ProfileMemory["digests"][numbe
 export const generateStrategyProposal = () => sendJson<ProfileMemory["strategies"][number]>("/api/v1/profile-memory/strategies", {});
 export const generateProfileInsight = () => sendJson<ProfileMemory["insights"]>("/api/v1/profile-memory/insights", {});
 export const runProfileImpacts = () => sendJson<{ queued: number; processed: number }>("/api/v1/profile-memory/impacts/run", {});
-export const resolveProfileMemoryProposal = (entityType: "profile_insight" | "strategy_snapshot", item: { id: string; version: number }, resolution: "confirmed" | "rejected") =>
-  sendJson<unknown>(`/api/v1/profile-memory/${entityType}/${item.id}/resolve`, { expected_version: item.version, resolution, reason: resolution === "confirmed" ? "用户确认该业务结论" : "用户判定该结论不适用" });
 export const getFacts = (status?: FactStatus) =>
   getJson<FactList>(`/api/v1/facts${status ? `?status=${status}` : ""}`);
 export const getDocuments = () => getJson<DocumentList>("/api/v1/documents");
@@ -949,9 +989,19 @@ export async function importFile(file: File): Promise<ImportedDocument> {
   form.append("file", file);
   return sendForm<ImportedDocument>("/api/v1/documents/import", form);
 }
+export const reprocessDocument = (documentId: string) =>
+  sendJson<ImportedDocument>(
+    `/api/v1/documents/${encodeURIComponent(documentId)}/reprocess`,
+    {},
+  );
 export const addManualFact = (body: {
   category: string; field_key: string; value: string; source_note: string;
 }) => sendJson<CandidateFact>("/api/v1/facts", body);
+export const reviseFact = (fact: CandidateFact, instruction: string) =>
+  sendJson<CandidateFact>(`/api/v1/facts/${fact.id}/agent-revise`, {
+    expected_version: fact.version,
+    instruction,
+  });
 export const confirmFact = (fact: CandidateFact) =>
   sendJson<CandidateFact>(`/api/v1/facts/${fact.id}/confirm`, {
     expected_version: fact.version, reason: "Confirmed in Career UI",
@@ -1031,6 +1081,37 @@ export const resolveResumeDirections = (proposal: ResumeDirectionProposal, resol
   });
 export const getMaterials = () => getJson<MaterialList>("/api/v1/materials");
 export const getResumeSeries = () => getJson<ResumeSeriesList>("/api/v1/resumes");
+export const getResume = (id: string) => getJson<ResumeDetail>(`/api/v1/resumes/${id}`);
+export const getStandaloneResumeProposals = () =>
+  getJson<StandaloneResumeProposalList>("/api/v1/resumes/agent-proposals");
+export const generateStandaloneResumeProposal = (body: { name: string; prompt: string }) =>
+  sendJson<StandaloneResumeProposal>("/api/v1/resumes/agent-proposals", body);
+export const resolveStandaloneResumeProposal = (
+  proposal: StandaloneResumeProposal,
+  resolution: "confirmed" | "rejected",
+) => sendJson<StandaloneResumeProposal>(
+  `/api/v1/resumes/agent-proposals/${proposal.id}/resolve`,
+  {
+    expected_version: proposal.version,
+    resolution,
+    reason: resolution === "confirmed"
+      ? "用户核对内容与事实依据后确认创建简历"
+      : "用户拒绝该独立简历候选",
+  },
+);
+export const editResume = (
+  resume: ResumeDetail,
+  blocks: Array<{ id: string; text: string }>,
+) => sendJson<ResumeDetail>(`/api/v1/resumes/${resume.id}/versions`, {
+  expected_version_id: resume.current_version.id,
+  blocks,
+});
+export const reviewResume = (id: string) =>
+  sendJson<ResumeDetail>(`/api/v1/resumes/${id}/reviews`, {});
+export const finalizeResume = (resume: ResumeDetail) =>
+  sendJson<ResumeDetail>(`/api/v1/resumes/${resume.id}/finalize`, {
+    expected_version_id: resume.current_version.id,
+  });
 export const getDefaultResume = () => getJson<ResumeSeries | null>("/api/v1/resumes/default");
 export const setDefaultResume = (resume: ResumeSeries, currentDefault: ResumeSeries | null) =>
   putJson<ResumeSeries>("/api/v1/resumes/default", {

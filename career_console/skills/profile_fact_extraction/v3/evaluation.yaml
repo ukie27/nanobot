@@ -1,0 +1,15 @@
+task_type: profile_fact_extraction
+skill_version: v3
+checks:
+  - output_matches_schema
+  - evidence_is_exact_input_substring
+  - content_is_normalized_career_profile_text
+  - normalized_content_is_separate_from_source_evidence
+  - broken_layout_and_unambiguous_ocr_noise_are_cleaned
+  - uncertainty_and_contribution_scope_are_preserved
+  - no_new_roles_technologies_dates_metrics_or_outcomes
+  - one_complete_business_object_per_experience
+  - skills_are_semantically_grouped_not_split
+  - contact_information_is_excluded
+  - no_tool_calls
+  - no_unsupported_inference

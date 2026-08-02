@@ -23,6 +23,10 @@ from career_console.application.ports.material_agent import MaterialReviewer, Re
 from career_console.application.ports.material_gateway import MaterialGateway
 from career_console.application.ports.opportunity_gateway import OpportunityGateway
 from career_console.application.ports.profile_gateway import ProfileGateway
+from career_console.application.ports.profile_fact_revision import (
+    ProfileFactReviser,
+    ProfileFactRevision,
+)
 from career_console.application.ports.profile_insight import ProfileInsightAnalyzer
 from career_console.application.ports.resume_direction import ResumeDirectionAnalyzer
 from career_console.application.ports.runtime_gateway import RuntimeGateway
@@ -53,6 +57,8 @@ __all__ = [
     "ReadOnlyImapClient",
     "SecretStore",
     "ProfileGateway",
+    "ProfileFactReviser",
+    "ProfileFactRevision",
     "ProfileInsightAnalyzer",
     "TaskGateway",
     "UnitOfWork",

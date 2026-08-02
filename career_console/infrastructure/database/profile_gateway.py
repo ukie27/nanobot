@@ -31,9 +31,6 @@ from career_console.infrastructure.database.models import (
 )
 from career_console.infrastructure.database.review_runtime import (
     create_agent_run,
-    ensure_review_bundle,
-    ensure_review_task,
-    link_review_task,
     refresh_bundle_resolution,
     set_review_resolution,
 )
@@ -103,6 +100,7 @@ class SqlAlchemyProfileGateway:
                 return None
             result = self._document_view(session, document, duplicate=True)
             result["proposed_fact_count"] = 0
+            result["maintained_fact_count"] = 0
             result["extracted_candidate_count"] = latest_run.output_count
             return result
 
@@ -129,6 +127,7 @@ class SqlAlchemyProfileGateway:
         input_tokens: int | None = None,
         output_tokens: int | None = None,
         retry_count: int = 0,
+        replace_document_facts: bool = False,
     ) -> dict[str, Any]:
         for fact in facts:
             if any(
@@ -150,9 +149,10 @@ class SqlAlchemyProfileGateway:
                     and latest_run.implementation == extractor_name
                     and latest_run.schema_version == extractor_schema_version
                 )
-                if current_extraction_completed:
+                if current_extraction_completed and not replace_document_facts:
                     result = self._document_view(session, existing, duplicate=True)
                     result["proposed_fact_count"] = 0
+                    result["maintained_fact_count"] = 0
                     result["extracted_candidate_count"] = latest_run.output_count
                     return result
             profile = self._ensure_profile(session, now)
@@ -182,13 +182,21 @@ class SqlAlchemyProfileGateway:
                 session.add(document)
             else:
                 document = existing
-                document.parse_status = (
-                    "parsed" if run_status == "succeeded" else "extraction_failed"
-                )
+                if run_status == "succeeded":
+                    document.parse_status = "parsed"
+                elif not replace_document_facts:
+                    document.parse_status = "extraction_failed"
             # The persistence models intentionally have no ORM relationships;
             # flush principals explicitly so SQLite foreign keys never depend
             # on mapper ordering heuristics.
             session.flush()
+            prior_document_fact_ids = set(
+                session.scalars(
+                    select(FactSourceModel.fact_id).where(
+                        FactSourceModel.document_id == document.id
+                    )
+                ).all()
+            )
             output_payload = [
                 {
                     "category": item.category.value,
@@ -235,9 +243,14 @@ class SqlAlchemyProfileGateway:
             )
             if run_status != "succeeded":
                 session.commit()
-                return self._document_view(session, document, duplicate=False)
-            created_count = 0
-            bundles: dict[str, Any] = {}
+                result = self._document_view(session, document, duplicate=False)
+                result["proposed_fact_count"] = 0
+                result["maintained_fact_count"] = 0
+                result["extracted_candidate_count"] = 0
+                return result
+            maintained_count = 0
+            maintained_fact_ids: set[str] = set()
+            display_name: str | None = None
             for extracted in facts:
                 normalized = self._normalize(extracted.value)
                 existing_fact = session.scalar(
@@ -256,7 +269,7 @@ class SqlAlchemyProfileGateway:
                         field_key=extracted.field_key,
                         value=extracted.value,
                         normalized_value=normalized,
-                        status=FactStatus.PROPOSED.value,
+                        status=FactStatus.CONFIRMED.value,
                         confidence=extracted.confidence,
                         version=1,
                         created_at=now,
@@ -264,72 +277,264 @@ class SqlAlchemyProfileGateway:
                     )
                     session.add(existing_fact)
                     session.flush()
-                    task = ensure_review_task(
+                    self._add_profile_change(
                         session,
-                        task_type="candidate_fact_review",
-                        entity_type="candidate_fact",
-                        entity_id=existing_fact.id,
-                        title=f"确认完整档案对象：{(extracted.title or extracted.value)[:200]}",
-                        summary="一项代表一段完整经历或一组语义完整的档案信息。",
-                        source_type="agent_extraction",
-                        priority=20,
-                        agent_run_id=run.id,
+                        existing_fact,
+                        event_type="fact_maintained",
+                        changed_fields={"status": FactStatus.CONFIRMED.value},
+                        impact_scopes=[
+                            "profile",
+                            "job_fit",
+                            "material_strategy",
+                            "career_strategy",
+                        ],
+                        source="agent_extraction",
                         now=now,
                     )
-                    category = extracted.category.value
-                    bundle = bundles.get(category)
-                    if bundle is None:
-                        category_title = {
-                            "basic": "基础信息",
-                            "education": "教育经历",
-                            "internship": "实习经历",
-                            "work": "工作经历",
-                            "project": "项目经历",
-                            "skill": "技能与能力",
-                            "award": "奖项荣誉",
-                            "certificate": "证书资质",
-                            "preference": "求职偏好",
-                            "constraint": "限制条件",
-                        }.get(category, "职业信息")
-                        bundle = ensure_review_bundle(
-                            session,
-                            bundle_type="profile_section",
-                            source_type="document_extraction",
-                            source_entity_id=document.id,
-                            section_type=category,
-                            aggregate_key=category,
-                            title=f"{document.file_name} · {category_title}",
-                            summary="按业务对象核对；每一项应是一段完整经历或完整信息组。",
-                            priority=20,
-                            agent_run_id=run.id,
-                            now=now,
+                    maintained_count += 1
+                    display_name = display_name or self._display_name(
+                        self._to_domain(existing_fact)
+                    )
+                elif existing_fact.status == FactStatus.PROPOSED.value:
+                    previous_version = existing_fact.version
+                    session.add(
+                        FactRevisionModel(
+                            id=str(uuid4()),
+                            fact_id=existing_fact.id,
+                            revision_number=previous_version + 1,
+                            previous_value=existing_fact.value,
+                            new_value=existing_fact.value,
+                            previous_status=FactStatus.PROPOSED.value,
+                            new_status=FactStatus.CONFIRMED.value,
+                            reason="新版档案维护流程自动写入正式档案",
+                            changed_by="system",
+                            created_at=now,
                         )
-                        bundles[category] = bundle
-                    link_review_task(
-                        session,
-                        bundle=bundle,
-                        task=task,
-                        entity_type="candidate_fact",
-                        entity_id=existing_fact.id,
-                        display_order=created_count,
-                        now=now,
                     )
-                    created_count += 1
-                session.add(
-                    FactSourceModel(
-                        id=str(uuid4()),
-                        fact_id=existing_fact.id,
-                        document_id=document.id,
-                        source_type="document_extraction",
-                        evidence_text=extracted.evidence_text[:2000],
-                        created_at=now,
+                    existing_fact.status = FactStatus.CONFIRMED.value
+                    existing_fact.version = previous_version + 1
+                    existing_fact.updated_at = now
+                    task = session.scalar(
+                        select(ReviewTaskModel).where(
+                            ReviewTaskModel.entity_id == existing_fact.id,
+                            ReviewTaskModel.task_type == "candidate_fact_review",
+                            ReviewTaskModel.status == "open",
+                        )
+                    )
+                    if task is not None:
+                        set_review_resolution(
+                            task,
+                            now=now,
+                            resolution="confirmed",
+                            reason="新版档案维护流程已直接写入正式档案。",
+                            resolved_by="system",
+                        )
+                        for bundle_id in session.scalars(
+                            select(ReviewBundleItemModel.bundle_id).where(
+                                ReviewBundleItemModel.review_task_id == task.id
+                            )
+                        ).all():
+                            refresh_bundle_resolution(session, bundle_id, now=now)
+                    self._add_profile_change(
+                        session,
+                        existing_fact,
+                        event_type="fact_maintained",
+                        changed_fields={
+                            "previous_status": FactStatus.PROPOSED.value,
+                            "status": FactStatus.CONFIRMED.value,
+                        },
+                        impact_scopes=[
+                            "profile",
+                            "job_fit",
+                            "material_strategy",
+                            "career_strategy",
+                        ],
+                        source="system",
+                        now=now,
+                        revision=existing_fact.version,
+                    )
+                    maintained_count += 1
+                    display_name = display_name or self._display_name(
+                        self._to_domain(existing_fact)
+                    )
+                maintained_fact_ids.add(existing_fact.id)
+                evidence_text = extracted.evidence_text[:2000]
+                existing_source = session.scalar(
+                    select(FactSourceModel).where(
+                        FactSourceModel.fact_id == existing_fact.id,
+                        FactSourceModel.document_id == document.id,
+                        FactSourceModel.source_type == "document_extraction",
+                        FactSourceModel.evidence_text == evidence_text,
                     )
                 )
+                if existing_source is None:
+                    session.add(
+                        FactSourceModel(
+                            id=str(uuid4()),
+                            fact_id=existing_fact.id,
+                            document_id=document.id,
+                            source_type="document_extraction",
+                            evidence_text=evidence_text,
+                            created_at=now,
+                        )
+                    )
+            self._supersede_prior_extraction_proposals(
+                session,
+                document_id=document.id,
+                current_run_id=run.id,
+                now=now,
+                skip_fact_ids=maintained_fact_ids,
+            )
+            superseded_count = 0
+            if replace_document_facts:
+                superseded_count = self._supersede_prior_document_facts(
+                    session,
+                    document_id=document.id,
+                    prior_fact_ids=prior_document_fact_ids,
+                    current_fact_ids=maintained_fact_ids,
+                    now=now,
+                )
+            if maintained_count:
+                profile.version += 1
+                profile.updated_at = now
+                if display_name:
+                    profile.display_name = display_name
+            if superseded_count:
+                profile.version += 1
+                profile.updated_at = now
             session.commit()
             result = self._document_view(session, document, duplicate=False)
-            result["proposed_fact_count"] = created_count
+            result["proposed_fact_count"] = 0
+            result["maintained_fact_count"] = (
+                len(maintained_fact_ids) if replace_document_facts else maintained_count
+            )
             result["extracted_candidate_count"] = len(facts)
+            result["superseded_fact_count"] = superseded_count
             return result
+
+    @staticmethod
+    def _supersede_prior_document_facts(
+        session: Session,
+        *,
+        document_id: str,
+        prior_fact_ids: set[str],
+        current_fact_ids: set[str],
+        now: datetime,
+    ) -> int:
+        superseded = 0
+        for fact_id in prior_fact_ids - current_fact_ids:
+            fact = session.get(CandidateFactModel, fact_id)
+            if fact is None or fact.status == FactStatus.REJECTED.value:
+                continue
+            sources = session.scalars(
+                select(FactSourceModel).where(FactSourceModel.fact_id == fact_id)
+            ).all()
+            if any(source.document_id != document_id for source in sources):
+                continue
+            previous_status = fact.status
+            next_version = fact.version + 1
+            session.add(
+                FactRevisionModel(
+                    id=str(uuid4()),
+                    fact_id=fact.id,
+                    revision_number=next_version,
+                    previous_value=fact.value,
+                    new_value=fact.value,
+                    previous_status=previous_status,
+                    new_status=FactStatus.REJECTED.value,
+                    reason="由同一资料的最新 Agent 整理结果替代",
+                    changed_by="system",
+                    created_at=now,
+                )
+            )
+            fact.status = FactStatus.REJECTED.value
+            fact.version = next_version
+            fact.updated_at = now
+            SqlAlchemyProfileGateway._add_profile_change(
+                session,
+                fact,
+                event_type="fact_superseded",
+                changed_fields={
+                    "previous_status": previous_status,
+                    "status": FactStatus.REJECTED.value,
+                    "document_id": document_id,
+                },
+                impact_scopes=[
+                    "profile",
+                    "job_fit",
+                    "material_strategy",
+                    "career_strategy",
+                ],
+                source="agent_reprocessing",
+                now=now,
+                revision=next_version,
+            )
+            superseded += 1
+        return superseded
+
+    @staticmethod
+    def _supersede_prior_extraction_proposals(
+        session: Session,
+        *,
+        document_id: str,
+        current_run_id: str,
+        now: datetime,
+        skip_fact_ids: set[str],
+    ) -> None:
+        tasks = session.scalars(
+            select(ReviewTaskModel)
+            .join(AgentRunModel, AgentRunModel.id == ReviewTaskModel.agent_run_id)
+            .where(
+                AgentRunModel.document_id == document_id,
+                AgentRunModel.task_type == "profile_fact_extraction",
+                AgentRunModel.id != current_run_id,
+                ReviewTaskModel.task_type == "candidate_fact_review",
+                ReviewTaskModel.entity_type == "candidate_fact",
+                ReviewTaskModel.status == "open",
+            )
+        ).all()
+        bundle_ids: set[str] = set()
+        for task in tasks:
+            fact = session.get(CandidateFactModel, task.entity_id)
+            if (
+                fact is None
+                or fact.id in skip_fact_ids
+                or fact.status != FactStatus.PROPOSED.value
+            ):
+                continue
+            session.add(
+                FactRevisionModel(
+                    id=str(uuid4()),
+                    fact_id=fact.id,
+                    revision_number=fact.version,
+                    previous_value=fact.value,
+                    new_value=fact.value,
+                    previous_status=fact.status,
+                    new_status=FactStatus.REJECTED.value,
+                    reason="由新版档案提取结果替代",
+                    changed_by="system",
+                    created_at=now,
+                )
+            )
+            fact.status = FactStatus.REJECTED.value
+            fact.version += 1
+            fact.updated_at = now
+            set_review_resolution(
+                task,
+                now=now,
+                resolution="rejected",
+                reason="同一文档已由新版档案提取 Skill 重新处理。",
+                resolved_by="system",
+            )
+            bundle_ids.update(
+                session.scalars(
+                    select(ReviewBundleItemModel.bundle_id).where(
+                        ReviewBundleItemModel.review_task_id == task.id
+                    )
+                ).all()
+            )
+        for bundle_id in bundle_ids:
+            refresh_bundle_resolution(session, bundle_id, now=now)
 
     @staticmethod
     def _latest_extraction_run(
@@ -378,6 +583,25 @@ class SqlAlchemyProfileGateway:
             return [
                 self._document_view(session, document, duplicate=False) for document in documents
             ]
+
+    def get_document_for_reprocessing(self, *, document_id: str) -> dict[str, Any]:
+        with self._session_factory() as session:
+            document = session.get(DocumentModel, document_id)
+            if document is None:
+                raise EntityNotFoundError("Imported document was not found.")
+            blob = session.get(BlobModel, document.blob_id)
+            if blob is None:
+                raise EntityNotFoundError("Imported document content was not found.")
+            return {
+                "id": document.id,
+                "file_name": document.file_name,
+                "media_type": document.media_type,
+                "sha256": document.sha256,
+                "size_bytes": document.size_bytes,
+                "blob_relative_path": blob.relative_path,
+                "text": document.extracted_text,
+                "parser_name": document.parser_name,
+            }
 
     def list_facts(self, *, status: str | None = None) -> list[dict[str, Any]]:
         with self._session_factory() as session:
@@ -428,7 +652,7 @@ class SqlAlchemyProfileGateway:
                 field_key=normalized_field_key,
                 value=value.strip(),
                 normalized_value=normalized,
-                status=FactStatus.PROPOSED.value,
+                status=FactStatus.CONFIRMED.value,
                 confidence=None,
                 version=1,
                 created_at=now,
@@ -445,41 +669,205 @@ class SqlAlchemyProfileGateway:
                     created_at=now,
                 )
             )
-            task = ensure_review_task(
+            self._add_profile_change(
                 session,
-                task_type="candidate_fact_review",
-                entity_type="candidate_fact",
-                entity_id=fact.id,
-                title=f"确认手动职业事实：{fact.value[:200]}",
-                summary=source_note,
-                source_type="manual",
-                priority=10,
+                fact,
+                event_type="fact_maintained",
+                changed_fields={"status": FactStatus.CONFIRMED.value},
+                impact_scopes=[
+                    "profile",
+                    "job_fit",
+                    "material_strategy",
+                    "career_strategy",
+                ],
+                source="user",
                 now=now,
             )
-            bundle = ensure_review_bundle(
+            profile.version += 1
+            profile.updated_at = now
+            display_name = self._display_name(self._to_domain(fact))
+            if display_name:
+                profile.display_name = display_name
+            session.commit()
+            return self._fact_view(session, fact)
+
+    def get_fact_for_revision(self, *, fact_id: str) -> dict[str, Any]:
+        with self._session_factory() as session:
+            fact = session.get(CandidateFactModel, fact_id)
+            if fact is None:
+                raise EntityNotFoundError("Candidate fact was not found.")
+            if fact.status != FactStatus.CONFIRMED.value:
+                raise CareerDomainError(
+                    "Only maintained profile facts can be revised.",
+                    code="profile_fact_revision_status_invalid",
+                )
+            return self._fact_view(session, fact)
+
+    def save_agent_revision(
+        self,
+        *,
+        fact_id: str,
+        expected_version: int,
+        instruction: str,
+        revised_value: str | None,
+        rationale: str | None,
+        reviser_name: str,
+        reviser_schema_version: str,
+        run_status: str,
+        error_code: str | None = None,
+        provider: str | None = None,
+        model: str | None = None,
+        prompt_version: str | None = None,
+        skill_version: str | None = None,
+        duration_ms: int | None = None,
+        input_tokens: int | None = None,
+        output_tokens: int | None = None,
+        retry_count: int = 0,
+    ) -> dict[str, Any] | None:
+        now = datetime.now(UTC)
+        input_hash = hashlib.sha256(
+            json.dumps(
+                {
+                    "fact_id": fact_id,
+                    "expected_version": expected_version,
+                    "instruction": instruction,
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        output_hash = (
+            hashlib.sha256((revised_value or "").encode("utf-8")).hexdigest()
+            if revised_value is not None
+            else None
+        )
+        with self._session_factory() as session:
+            run = create_agent_run(
                 session,
-                bundle_type="profile_section",
-                source_type="manual",
-                source_entity_id=fact.id,
-                section_type=category_value,
-                aggregate_key=fact.id,
-                title="手动补充的职业信息",
-                summary="核对这项手动补充内容后再写入可信职业档案。",
-                priority=10,
-                now=now,
+                task_type="profile_fact_revision",
+                implementation=reviser_name,
+                schema_version=reviser_schema_version,
+                status=run_status,
+                output_count=1 if run_status == "succeeded" else 0,
+                error_code=error_code,
+                created_at=now,
+                finished_at=now,
+                provider=provider,
+                model=model,
+                prompt_version=prompt_version,
+                skill_version=skill_version,
+                input_entity_type="candidate_fact",
+                input_entity_id=fact_id,
+                input_revision=str(expected_version),
+                input_hash=input_hash,
+                output_hash=output_hash,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                duration_ms=duration_ms,
+                retry_count=retry_count,
+                sensitivity="sensitive",
             )
-            link_review_task(
-                session,
-                bundle=bundle,
-                task=task,
-                entity_type="candidate_fact",
-                entity_id=fact.id,
-                now=now,
+            if run_status != "succeeded":
+                session.commit()
+                return None
+            fact = session.get(CandidateFactModel, fact_id)
+            validation_error: CareerDomainError | None = None
+            if fact is None:
+                validation_error = EntityNotFoundError("Candidate fact was not found.")
+            elif fact.status != FactStatus.CONFIRMED.value:
+                validation_error = CareerDomainError(
+                    "Only maintained profile facts can be revised.",
+                    code="profile_fact_revision_status_invalid",
+                )
+            elif fact.version != expected_version:
+                validation_error = VersionConflictError(
+                    f"Fact changed after it was loaded; current version is {fact.version}."
+                )
+            normalized_value = self._normalize(revised_value or "")
+            if validation_error is None and not normalized_value:
+                validation_error = CareerDomainError(
+                    "Fact value cannot be empty.", code="empty_fact_value"
+                )
+            if validation_error is None:
+                try:
+                    self._reject_contact_information(revised_value or "")
+                except CareerDomainError as exc:
+                    validation_error = exc
+            if (
+                validation_error is None
+                and normalized_value == self._normalize(fact.value)
+            ):
+                validation_error = CareerDomainError(
+                    "档案内容没有发生变化。", code="profile_revision_unchanged"
+                )
+            if validation_error is None:
+                duplicate = session.scalar(
+                    select(CandidateFactModel).where(
+                        CandidateFactModel.id != fact_id,
+                        CandidateFactModel.profile_id == fact.profile_id,
+                        CandidateFactModel.category == fact.category,
+                        CandidateFactModel.field_key == fact.field_key,
+                        CandidateFactModel.normalized_value == normalized_value,
+                    )
+                )
+                if duplicate is not None:
+                    validation_error = DuplicateFactError(
+                        "An equivalent fact already exists."
+                    )
+            if validation_error is not None:
+                run.status = "failed"
+                run.output_count = 0
+                run.error_code = validation_error.code
+                session.commit()
+                raise validation_error
+            previous_value = fact.value
+            fact.value = (revised_value or "").strip()
+            fact.normalized_value = normalized_value
+            fact.version += 1
+            fact.updated_at = now
+            session.add(
+                FactRevisionModel(
+                    id=str(uuid4()),
+                    fact_id=fact.id,
+                    revision_number=fact.version,
+                    previous_value=previous_value,
+                    new_value=fact.value,
+                    previous_status=FactStatus.CONFIRMED.value,
+                    new_status=FactStatus.CONFIRMED.value,
+                    reason=(rationale or instruction).strip()[:500],
+                    changed_by="agent",
+                    created_at=now,
+                )
             )
             self._add_profile_change(
-                session, fact, event_type="fact_proposed", changed_fields={"status": "proposed"},
-                impact_scopes=["profile_review"], source="user", now=now,
+                session,
+                fact,
+                event_type="fact_agent_revised",
+                changed_fields={
+                    "previous_value": previous_value,
+                    "value": fact.value,
+                    "instruction_hash": hashlib.sha256(
+                        instruction.encode("utf-8")
+                    ).hexdigest(),
+                },
+                impact_scopes=[
+                    "profile",
+                    "job_fit",
+                    "material_strategy",
+                    "career_strategy",
+                ],
+                source="agent",
+                now=now,
+                revision=fact.version,
             )
+            profile = session.get(CandidateProfileModel, fact.profile_id)
+            if profile is not None:
+                profile.version += 1
+                profile.updated_at = now
+                display_name = self._display_name(self._to_domain(fact))
+                if display_name:
+                    profile.display_name = display_name
             session.commit()
             return self._fact_view(session, fact)
 

@@ -73,22 +73,31 @@ class CareerSchedulerRuntime:
         if config.enabled:
             if config.reminders_enabled:
                 self._merge(counters, self._safe(errors, "reminders", self.task_service.run_due, now=now))
-            if config.connector_jobs_enabled:
-                for name, service in (("boss", self.connector_service), ("nowcoder", self.nowcoder_service), ("imap", self.mail_service)):
-                    result = self._safe(
-                        errors, name, service.run_due,
-                        **({"now": now or started} if name == "nowcoder" else {})
-                    )
-                    self._merge(counters, result)
-                    counters["connector_runs_processed"] += int(result is not None)
+            if config.nowcoder_sync_enabled:
+                result = self._safe(
+                    errors, "nowcoder", self.nowcoder_service.run_due,
+                    now=now or started,
+                )
+                self._merge(counters, result)
+                counters["connector_runs_processed"] += int(result is not None)
+            if config.mail_sync_enabled:
+                result = self._safe(errors, "imap", self.mail_service.run_due)
+                self._merge(counters, result)
+                counters["connector_runs_processed"] += int(result is not None)
                 for _ in range(10):
-                    result = self._safe(errors, "mail_analysis", self.mail_service.process_next_analysis_job)
+                    result = self._safe(
+                        errors,
+                        "mail_analysis",
+                        self.mail_service.process_next_analysis_job,
+                    )
                     if not result:
                         break
                     counters["mail_analysis_processed"] += 1
             if config.profile_maintenance_enabled and self._profile_due(
                 config.profile_maintenance_time, now or started
-            ) and not self._profile_completed_today(now or started):
+            ) and not self._profile_completed_within_interval(
+                now or started, config.profile_maintenance_interval_days
+            ):
                 result = self._safe(
                     errors, "profile_memory", self.profile_memory.run_due, now=now or started
                 )
@@ -178,19 +187,25 @@ class CareerSchedulerRuntime:
         local = now.astimezone(ZoneInfo("Asia/Shanghai"))
         return local.strftime("%H:%M") >= configured_time
 
-    def _profile_completed_today(self, now: datetime) -> bool:
+    def _profile_completed_within_interval(
+        self, now: datetime, interval_days: int
+    ) -> bool:
         china = ZoneInfo("Asia/Shanghai")
         local = now.astimezone(china)
-        start = local.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(UTC)
-        end = (start.astimezone(china).replace(hour=0) + timedelta(days=1)).astimezone(UTC)
         with self.session_factory() as session:
-            counters = session.scalars(
-                select(SchedulerRunModel.counters_json).where(
-                    SchedulerRunModel.started_at >= start,
-                    SchedulerRunModel.started_at < end,
-                )
+            rows = session.execute(
+                select(
+                    SchedulerRunModel.started_at,
+                    SchedulerRunModel.counters_json,
+                ).order_by(SchedulerRunModel.started_at.desc())
             ).all()
-        return any(
-            int(json.loads(value).get("profile_jobs_processed", 0)) > 0
-            for value in counters
-        )
+        for started_at, counters_json in rows:
+            if int(json.loads(counters_json).get("profile_jobs_processed", 0)) <= 0:
+                continue
+            completed = (
+                started_at.replace(tzinfo=UTC)
+                if started_at.tzinfo is None
+                else started_at.astimezone(UTC)
+            ).astimezone(china)
+            return (local.date() - completed.date()).days < interval_days
+        return False

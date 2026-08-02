@@ -22,6 +22,7 @@ from career_console.infrastructure.database.models import (
     CareerPreferenceModel,
     CareerTaskModel,
     DailyDigestModel,
+    ImprovementItemModel,
     ProfileChangeEventModel,
     ProfileImpactRunModel,
     ProfileInsightProposalModel,
@@ -33,11 +34,7 @@ from career_console.infrastructure.database.profile_gateway import (
     VersionConflictError,
     ensure_profile_model,
 )
-from career_console.infrastructure.database.review_runtime import (
-    create_agent_run,
-    ensure_review_task,
-    set_review_resolution,
-)
+from career_console.infrastructure.database.review_runtime import create_agent_run
 
 
 class SqlAlchemyProfileMemoryGateway:
@@ -50,7 +47,8 @@ class SqlAlchemyProfileMemoryGateway:
                 CareerPreferenceModel.profile_id == PROFILE_ID
             ).order_by(CareerPreferenceModel.preference_key)).all()
             insights = session.scalars(select(ProfileInsightProposalModel).where(
-                ProfileInsightProposalModel.profile_id == PROFILE_ID
+                ProfileInsightProposalModel.profile_id == PROFILE_ID,
+                ProfileInsightProposalModel.status == "active",
             ).order_by(ProfileInsightProposalModel.created_at.desc())).all()
             strategies = session.scalars(select(StrategySnapshotModel).where(
                 StrategySnapshotModel.profile_id == PROFILE_ID
@@ -196,12 +194,6 @@ class SqlAlchemyProfileMemoryGateway:
             ).order_by(StrategySnapshotModel.version_number.desc()))
             if latest is not None and self._aware(latest.created_at) >= period_start:
                 return self._strategy_view(session, latest)
-            existing = session.scalar(select(StrategySnapshotModel).where(
-                StrategySnapshotModel.profile_id == PROFILE_ID,
-                StrategySnapshotModel.status == "proposed",
-            ).order_by(StrategySnapshotModel.version_number.desc()))
-            if existing is not None:
-                return self._strategy_view(session, existing)
             preferences = session.scalars(select(CareerPreferenceModel).where(
                 CareerPreferenceModel.profile_id == PROFILE_ID,
                 CareerPreferenceModel.status == "confirmed",
@@ -227,9 +219,9 @@ class SqlAlchemyProfileMemoryGateway:
                 "application_count": len(applications),
                 "confirmed_fact_count": len(facts),
                 "actions": [
-                    "处理待确认事实与洞察",
+                    "根据目标岗位复核当前最重要的能力缺口",
                     "优先完善高匹配岗位的真实 JD 和材料",
-                    "复核即将到期的申请任务",
+                    "复核即将到期的申请任务与面试准备",
                 ],
                 "evaluation_period_days": 7,
             }
@@ -238,17 +230,11 @@ class SqlAlchemyProfileMemoryGateway:
                 schema_version="career_strategy.v1", period_start=period_start, period_end=now,
                 content_json=json.dumps(content, ensure_ascii=False),
                 evidence_refs_json=json.dumps([item.id for item in changes]),
-                status="proposed", version=1, resolution_reason=None,
+                status="active", version=1, resolution_reason=None,
                 created_at=now, resolved_at=None,
             )
             session.add(row)
             session.flush()
-            ensure_review_task(
-                session, task_type="career_strategy_review", entity_type="strategy_snapshot",
-                entity_id=row.id, title=f"确认第 {version_number} 版求职策略",
-                summary="基于近 7 天业务事件、已确认偏好与事实生成的策略候选。",
-                source_type="business_aggregation", priority=20, now=now,
-            )
             try:
                 session.commit()
             except IntegrityError:
@@ -277,11 +263,13 @@ class SqlAlchemyProfileMemoryGateway:
                 CareerPreferenceModel.profile_id == PROFILE_ID,
                 CareerPreferenceModel.status == "confirmed",
             ).order_by(CareerPreferenceModel.preference_key)).all()
-            strategy = session.scalar(select(StrategySnapshotModel).where(
-                StrategySnapshotModel.profile_id == PROFILE_ID,
-                StrategySnapshotModel.status == "confirmed",
-            ).order_by(StrategySnapshotModel.version_number.desc()))
             applications = session.scalars(select(ApplicationModel)).all()
+            improvements = session.scalars(select(ImprovementItemModel).where(
+                ImprovementItemModel.status == "active",
+            ).order_by(
+                ImprovementItemModel.updated_at.desc(),
+                ImprovementItemModel.id,
+            )).all()
             recent_changes = session.scalar(select(func.count()).select_from(
                 ProfileChangeEventModel
             ).where(
@@ -291,14 +279,18 @@ class SqlAlchemyProfileMemoryGateway:
             revision_source = [
                 *(f"fact:{item.id}:{item.version}" for item in facts),
                 *(f"preference:{item.id}:{item.version}" for item in preferences),
-                f"strategy:{strategy.id}:{strategy.version}" if strategy else "strategy:none",
+                *(
+                    f"improvement:{item.id}:{self._utc(item.updated_at).isoformat()}:"
+                    f"{item.occurrence_count}"
+                    for item in improvements
+                ),
             ]
             input_revision = hashlib.sha256("\n".join(revision_source).encode()).hexdigest()
             statuses: dict[str, int] = {}
             for application in applications:
                 statuses[application.current_status] = statuses.get(application.current_status, 0) + 1
             return {
-                "schemaVersion": "profile_insight_context.v1",
+                "schemaVersion": "profile_insight_context.v3",
                 "businessTimezone": "Asia/Shanghai",
                 "inputRevision": input_revision,
                 "confirmedFacts": [
@@ -311,10 +303,17 @@ class SqlAlchemyProfileMemoryGateway:
                      "version": item.version}
                     for item in preferences
                 ],
-                "confirmedStrategy": None if strategy is None else {
-                    "version": strategy.version_number,
-                    "content": json.loads(strategy.content_json),
-                },
+                "confirmedInterviewImprovements": [
+                    {
+                        "id": item.id,
+                        "category": item.category,
+                        "title": item.title,
+                        "description": item.description,
+                        "occurrenceCount": item.occurrence_count,
+                        "updatedAt": self._utc(item.updated_at),
+                    }
+                    for item in improvements
+                ],
                 "recentSevenDayAggregates": {
                     "profileChangeCount": recent_changes,
                     "applicationCount": len(applications),
@@ -329,6 +328,7 @@ class SqlAlchemyProfileMemoryGateway:
                 select(AgentRunModel)
                 .where(
                     AgentRunModel.task_type == "profile_insight",
+                    AgentRunModel.schema_version == "profile_insight.v3",
                     AgentRunModel.input_hash == input_hash,
                     AgentRunModel.status == "succeeded",
                 )
@@ -338,7 +338,10 @@ class SqlAlchemyProfileMemoryGateway:
                 return None
             rows = session.scalars(
                 select(ProfileInsightProposalModel)
-                .where(ProfileInsightProposalModel.agent_run_id == run.id)
+                .where(
+                    ProfileInsightProposalModel.agent_run_id == run.id,
+                    ProfileInsightProposalModel.status == "active",
+                )
                 .order_by(ProfileInsightProposalModel.created_at)
             ).all()
             return [self._insight_view(session, row) for row in rows]
@@ -361,24 +364,33 @@ class SqlAlchemyProfileMemoryGateway:
                 output_tokens=audit.get("output_tokens"), duration_ms=audit.get("duration_ms"),
                 retry_count=audit.get("retry_count", 0), sensitivity="sensitive",
             )
+            previous_rows = session.scalars(
+                select(ProfileInsightProposalModel).where(
+                    ProfileInsightProposalModel.profile_id == PROFILE_ID,
+                    ProfileInsightProposalModel.status == "active",
+                )
+            ).all()
+            for previous in previous_rows:
+                previous.status = "superseded"
+                previous.version += 1
+                previous.resolution_reason = "由最新一轮档案分析替代"
+                previous.resolved_at = now
             rows = []
             for insight in result.insights:
                 row = ProfileInsightProposalModel(
-                    id=str(uuid4()), profile_id=PROFILE_ID, insight_type=insight.insight_type,
-                    conclusion=insight.conclusion,
-                    evidence_refs_json=json.dumps(insight.evidence_fact_ids),
+                    id=str(uuid4()), profile_id=PROFILE_ID, insight_type=insight.category,
+                    conclusion=insight.analysis, recommended_action=insight.recommendation,
+                    evidence_refs_json=json.dumps({
+                        "fact_ids": insight.evidence_fact_ids,
+                        "improvement_ids": insight.evidence_improvement_ids,
+                    }),
                     counter_evidence_json=json.dumps(insight.counter_evidence_fact_ids),
                     confidence=insight.confidence, source="career_console_profile_insight",
-                    status="proposed", version=1, agent_run_id=run.id,
+                    status="active", version=1, agent_run_id=run.id,
                     resolution_reason=None, created_at=now, resolved_at=None,
                 )
                 session.add(row)
                 session.flush()
-                ensure_review_task(
-                    session, task_type="profile_insight_review", entity_type="profile_insight",
-                    entity_id=row.id, title="确认职业档案洞察", summary=row.conclusion,
-                    source_type=row.source, priority=15, agent_run_id=run.id, now=now,
-                )
                 rows.append(row)
             session.commit()
             return [self._insight_view(session, row) for row in rows]
@@ -389,7 +401,7 @@ class SqlAlchemyProfileMemoryGateway:
         with self._session_factory() as session:
             create_agent_run(
                 session, task_type="profile_insight", implementation=audit["implementation"],
-                schema_version="profile_insight.v1", status="failed", output_count=0,
+                schema_version="profile_insight.v3", status="failed", output_count=0,
                 error_code=error_code, created_at=audit["created_at"], finished_at=now,
                 provider=audit.get("provider"), model=audit.get("model"),
                 prompt_version=audit.get("prompt_version"),
@@ -401,41 +413,6 @@ class SqlAlchemyProfileMemoryGateway:
                 sensitivity="sensitive",
             )
             session.commit()
-
-    def resolve(self, *, entity_type: str, entity_id: str, expected_version: int,
-                resolution: str, reason: str) -> dict[str, Any]:
-        if resolution not in {"confirmed", "rejected"}:
-            raise ValueError("不支持的审核结果。")
-        now = datetime.now(UTC)
-        model = ProfileInsightProposalModel if entity_type == "profile_insight" else StrategySnapshotModel
-        with self._session_factory() as session:
-            row = session.get(model, entity_id)
-            if row is None:
-                raise LookupError("待审核对象不存在。")
-            if row.status != "proposed":
-                return self._insight_view(session, row) if entity_type == "profile_insight" else self._strategy_view(session, row)
-            if row.version != expected_version:
-                raise VersionConflictError("Review entity changed after it was loaded.")
-            row.status = resolution
-            row.version += 1
-            row.resolution_reason = reason[:500]
-            row.resolved_at = now
-            task = session.scalar(select(ReviewTaskModel).where(
-                ReviewTaskModel.entity_type == entity_type,
-                ReviewTaskModel.entity_id == entity_id,
-            ))
-            if task:
-                set_review_resolution(task, now=now, resolution=resolution, reason=reason)
-            if resolution == "confirmed":
-                self._add_change(
-                    session, event_type=f"{entity_type}_confirmed", entity_type=entity_type,
-                    entity_id=entity_id, entity_revision=row.version,
-                    changed_fields={"status": resolution},
-                    impact_scopes=["career_strategy", "job_fit", "material_strategy"],
-                    source="user", now=now,
-                )
-            session.commit()
-            return self._insight_view(session, row) if entity_type == "profile_insight" else self._strategy_view(session, row)
 
     @staticmethod
     def _add_change(session: Session, *, event_type: str, entity_type: str, entity_id: str,
@@ -478,8 +455,19 @@ class SqlAlchemyProfileMemoryGateway:
     @staticmethod
     def _insight_view(session: Session, row: ProfileInsightProposalModel) -> dict[str, Any]:
         task = session.scalar(select(ReviewTaskModel).where(ReviewTaskModel.entity_type == "profile_insight", ReviewTaskModel.entity_id == row.id))
-        return {"id": row.id, "insight_type": row.insight_type, "conclusion": row.conclusion,
-                "evidence_refs": json.loads(row.evidence_refs_json), "counter_evidence": json.loads(row.counter_evidence_json),
+        evidence = json.loads(row.evidence_refs_json)
+        if isinstance(evidence, list):
+            evidence_fact_ids = evidence
+            evidence_improvement_ids: list[str] = []
+        else:
+            evidence_fact_ids = evidence.get("fact_ids", [])
+            evidence_improvement_ids = evidence.get("improvement_ids", [])
+        return {"id": row.id, "category": row.insight_type, "analysis": row.conclusion,
+                "recommendation": row.recommended_action,
+                "evidence_refs": [*evidence_fact_ids, *evidence_improvement_ids],
+                "evidence_fact_ids": evidence_fact_ids,
+                "evidence_improvement_ids": evidence_improvement_ids,
+                "counter_evidence": json.loads(row.counter_evidence_json),
                 "confidence": row.confidence, "source": row.source, "status": row.status, "version": row.version,
                 "agent_run_id": row.agent_run_id, "review_task_id": task.id if task else None,
                 "resolution_reason": row.resolution_reason, "created_at": row.created_at, "resolved_at": row.resolved_at}

@@ -15,8 +15,8 @@ from career_console.application.agent_tasks import (
 def test_default_registry_contains_complete_unique_task_contracts() -> None:
     definitions = default_task_registry.all()
 
-    assert len(definitions) == 12
-    assert len({item.task_type for item in definitions}) == 12
+    assert len(definitions) == 14
+    assert len({item.task_type for item in definitions}) == 14
     for item in definitions:
         assert item.skill_id
         assert item.skill_version
@@ -24,11 +24,11 @@ def test_default_registry_contains_complete_unique_task_contracts() -> None:
         assert item.output_schema
         assert item.context_manifest
         assert item.provider_policy == "configured_task_provider"
-        expected_review_policy = (
-            "automatic_recommendation"
-            if item.task_type == "daily_job_recommendation"
-            else "proposal_requires_confirmation"
-        )
+        expected_review_policy = {
+            "profile_fact_extraction": "deterministic_profile_write",
+            "profile_fact_revision": "deterministic_profile_revision",
+            "daily_job_recommendation": "automatic_recommendation",
+        }.get(item.task_type, "proposal_requires_confirmation")
         assert item.review_policy == expected_review_policy
 
 
@@ -44,7 +44,11 @@ def test_every_registered_skill_can_be_loaded() -> None:
 
 
 def test_profile_and_mail_tasks_are_tool_free() -> None:
-    for task_type in ("profile_fact_extraction", "mail_intelligence"):
+    for task_type in (
+        "profile_fact_extraction",
+        "profile_fact_revision",
+        "mail_intelligence",
+    ):
         assert default_task_registry.resolve(task_type).tool_allowlist == ()
 
 
@@ -99,12 +103,20 @@ def test_tool_authorization_rejects_privilege_escalation() -> None:
 
 def test_task_schema_names_match_business_contracts() -> None:
     expected = {
-        "profile_fact_extraction": ("profile_document.v1", "candidate_profile_object.v2"),
+        "profile_fact_extraction": ("profile_document.v1", "candidate_profile_object.v3"),
+        "profile_fact_revision": (
+            "profile_fact_revision_context.v1",
+            "profile_fact_revision.v1",
+        ),
         "mail_intelligence": ("mail_context.v1", "mail_intelligence.v1"),
-        "profile_insight": ("profile_insight_context.v1", "profile_insight.v1"),
+        "profile_insight": ("profile_insight_context.v2", "profile_insight.v2"),
         "job_fit": ("job_fit_context.v2", "job_fit_analysis.v2"),
         "resume_direction": ("resume_direction_context.v1", "resume_direction.v1"),
         "resume_drafting": ("resume_draft_context.v2", "resume_draft.v2"),
+        "standalone_resume_drafting": (
+            "standalone_resume_context.v1",
+            "resume_draft.v2",
+        ),
         "material_review": ("material_review_context.v2", "material_review.v2"),
         "interview_preparation": (
             "interview_preparation_context.v1",

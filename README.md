@@ -7,10 +7,12 @@ CareerConsole 是本地优先的 AI 求职工作台。它用结构化、可追�
 ## 启动
 
 ```powershell
-.\.venv\Scripts\python.exe -m career_console serve
+.\career-console.cmd
 ```
 
 浏览器打开 `http://127.0.0.1:8765`。首次启动会进入初始化向导，先选择正式工作区，再按需配置模型、招聘来源、只读邮箱、QQ 通知和自动任务。
+
+首次选择或在前端切换工作区后，CareerConsole 会把当前工作区位置保存在本机 Bootstrap 中。后续启动不需要再传 `--workspace`。`--workspace` 仅用于开发、诊断或一次性覆盖。
 
 ## 验证
 

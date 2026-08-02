@@ -111,7 +111,15 @@ function ConfigurationForm({ status, advanced = false }: { status: Configuration
   return <form onSubmit={submit} className="settings-stack">
     {!advanced && <><section className="panel"><div className="panel-heading"><div><p className="eyebrow">语言与时间</p><h2>常规</h2></div><span>保存后立即生效</span></div><div className="form-grid">
       <label>界面语言<select name="locale" defaultValue={item.general.locale}><option value="zh-CN">简体中文</option><option value="en-US">English</option></select></label>
-      <label>业务时区<input name="timezone" defaultValue={item.general.timezone} required /></label>
+      <label>时区<select name="timezone" defaultValue={item.general.timezone}>
+        <option value="Asia/Shanghai">中国标准时间（上海）</option>
+        <option value="Asia/Tokyo">日本标准时间（东京）</option>
+        <option value="Asia/Singapore">新加坡时间</option>
+        <option value="Europe/London">英国时间（伦敦）</option>
+        <option value="America/New_York">美国东部时间（纽约）</option>
+        <option value="America/Los_Angeles">美国太平洋时间（洛杉矶）</option>
+        <option value="UTC">协调世界时（UTC）</option>
+      </select></label>
       <label>日期格式<select name="date_format" defaultValue={item.general.date_format}><option value="yyyy-MM-dd">{dateDash}</option><option value="yyyy/MM/dd">{dateSlash}</option></select></label>
       <label className="check-row"><input type="checkbox" name="open_browser_on_start" defaultChecked={item.general.open_browser_on_start} />启动后自动打开浏览器</label>
     </div></section>
@@ -132,7 +140,8 @@ function ConfigurationForm({ status, advanced = false }: { status: Configuration
 }
 
 const TASK_LABELS: Record<AgentTaskName, string> = {
-  fact_extraction: "事实提取", mail_intelligence: "邮件分析",
+  fact_extraction: "档案提取", profile_revision: "档案修改",
+  mail_intelligence: "邮件分析",
   profile_insight: "档案洞察", job_fit: "岗位匹配",
   resume_direction: "简历方向", resume_drafting: "材料撰写",
   material_review: "材料复核", daily_job_recommendation: "每日岗位推荐",
@@ -332,8 +341,11 @@ export function SchedulerSettings({ status }: { status: ConfigurationStatus }) {
   const save = useMutation({ mutationFn: (form: FormData) => configureScheduler(status.revision, {
     enabled: form.has("enabled"), poll_seconds: Number(form.get("poll_seconds")),
     reminders_enabled: form.has("reminders_enabled"),
-    connector_jobs_enabled: form.has("connector_jobs_enabled"),
+    connector_jobs_enabled: false,
+    nowcoder_sync_enabled: form.has("nowcoder_sync_enabled"),
+    mail_sync_enabled: form.has("mail_sync_enabled"),
     profile_maintenance_enabled: form.has("profile_maintenance_enabled"),
+    profile_maintenance_interval_days: Number(form.get("profile_maintenance_interval_days")),
     profile_maintenance_time: String(form.get("profile_maintenance_time")),
     channel_dispatch_enabled: form.has("channel_dispatch_enabled"),
   }), onSuccess: async () => { await Promise.all([
@@ -384,12 +396,27 @@ export function SchedulerSettings({ status }: { status: ConfigurationStatus }) {
     }
     return items;
   }, []).slice(0, 10);
-  return <div className="settings-stack provider-settings"><section className="panel"><div className="panel-heading"><div><p className="eyebrow">北京时间运行</p><h2>自动任务</h2></div><span>Asia/Shanghai</span></div><p className="section-note">统一控制任务提醒、邮件轮询、牛客当天同步、档案维护与通知分发。失败会隔离记录，不会阻断其他任务。</p><form className="form-grid" onSubmit={event => { event.preventDefault(); save.mutate(new FormData(event.currentTarget)); }}>
-    <label className="check-row"><input name="enabled" type="checkbox" defaultChecked={item.enabled} />启用自动任务服务</label>
-    <label className="check-row"><input name="reminders_enabled" type="checkbox" defaultChecked={item.reminders_enabled} />发送任务与日程提醒</label><label className="check-row"><input name="connector_jobs_enabled" type="checkbox" defaultChecked={item.connector_jobs_enabled} />同步招聘信息与邮箱</label><label className="check-row"><input name="profile_maintenance_enabled" type="checkbox" defaultChecked={item.profile_maintenance_enabled} />每天分析并完善职业档案</label><label>每日分析时间<input name="profile_maintenance_time" type="time" defaultValue={item.profile_maintenance_time} /></label><label className="check-row"><input name="channel_dispatch_enabled" type="checkbox" defaultChecked={item.channel_dispatch_enabled} />向已配置的通知渠道发送提醒</label>
-    <p className="section-note wide">到达设定时间后，系统会按北京时间生成当天摘要，并用专职档案 Skill 分析已确认信息。相同输入不会重复生成洞察，所有新洞察仍需你确认。</p>
-    <details className="wide inline-advanced"><summary>高级运行频率</summary><label>后台检查周期（秒）<input name="poll_seconds" type="number" min="10" max="3600" defaultValue={item.poll_seconds} /></label></details>
-    <div className="form-actions"><button disabled={save.isPending}>{save.isPending ? "正在保存…" : "保存自动任务设置"}</button><button type="button" className="secondary" disabled={runNow.isPending} onClick={() => runNow.mutate()}>{runNow.isPending ? "正在运行…" : "立即运行一次"}</button></div>
+  return <div className="settings-stack provider-settings"><section className="panel"><div className="panel-heading"><div><p className="eyebrow">分别设置</p><h2>自动任务</h2></div><span>北京时间</span></div><form className="automation-settings-form" onSubmit={event => { event.preventDefault(); save.mutate(new FormData(event.currentTarget)); }}>
+    <div className="automation-task-list">
+      <article className="automation-task-row">
+        <div><label className="check-row"><input name="profile_maintenance_enabled" type="checkbox" defaultChecked={item.profile_maintenance_enabled} /><strong>洞察建议</strong></label><p>定期刷新个人档案页面中的分类建议。</p></div>
+        <div className="automation-task-controls"><label>更新周期<select name="profile_maintenance_interval_days" defaultValue={item.profile_maintenance_interval_days}><option value="1">每天</option><option value="3">每 3 天</option><option value="7">每 7 天</option><option value="14">每 14 天</option></select></label><label>执行时间<input name="profile_maintenance_time" type="time" defaultValue={item.profile_maintenance_time} /></label></div>
+      </article>
+      <article className="automation-task-row">
+        <div><label className="check-row"><input name="reminders_enabled" type="checkbox" defaultChecked={item.reminders_enabled} /><strong>任务与日程提醒</strong></label><p>检查到期任务并生成提醒。</p></div>
+      </article>
+      <article className="automation-task-row">
+        <div><label className="check-row"><input name="nowcoder_sync_enabled" type="checkbox" defaultChecked={item.nowcoder_sync_enabled} /><strong>牛客招聘同步</strong></label><p>按牛客数据源中设置的时间获取当天新增信息。</p></div>
+      </article>
+      <article className="automation-task-row">
+        <div><label className="check-row"><input name="mail_sync_enabled" type="checkbox" defaultChecked={item.mail_sync_enabled} /><strong>招聘邮箱扫描</strong></label><p>按邮箱配置的扫描间隔读取招聘邮件。</p></div>
+      </article>
+      <article className="automation-task-row">
+        <div><label className="check-row"><input name="channel_dispatch_enabled" type="checkbox" defaultChecked={item.channel_dispatch_enabled} /><strong>外部通知发送</strong></label><p>向已启用的 QQ 等通知渠道发送提醒。</p></div>
+      </article>
+    </div>
+    <details className="inline-advanced"><summary>后台调度服务</summary><div className="automation-runtime-controls"><label className="check-row"><input name="enabled" type="checkbox" defaultChecked={item.enabled} />运行后台调度服务</label><label>检查周期（秒）<input name="poll_seconds" type="number" min="10" max="3600" defaultValue={item.poll_seconds} /></label></div></details>
+    <div className="form-actions"><button disabled={save.isPending}>{save.isPending ? "正在保存…" : "保存自动任务设置"}</button><button type="button" className="secondary" disabled={runNow.isPending} onClick={() => runNow.mutate()}>{runNow.isPending ? "正在运行…" : "立即检查已启用任务"}</button></div>
   </form>{(save.error || runNow.error) && <p className="form-error">{(save.error ?? runNow.error)?.message}</p>}<ConfigurationTestButton capability="scheduler" label="检查配置完整性" /></section><section className="panel"><div className="panel-heading"><div><p className="eyebrow">运行记录</p><h2>最近自动任务</h2></div><span>{runs.data?.total ?? 0} 条</span></div>{visibleRuns.length ? visibleRuns.map(({ run, repeats }) => <article className="change-row" key={run.id}><strong>{triggerLabels[run.trigger_type] ?? run.trigger_type} · {statusLabels[run.status] ?? run.status}{repeats > 1 ? `（连续 ${repeats} 次）` : ""}</strong><span>提醒 {run.counters.reminders_triggered ?? 0} · 数据来源 {run.counters.connector_runs_processed ?? 0} · 档案洞察 {run.counters.profile_insights_created ?? 0} · 通知 {run.counters.channel_sent ?? 0}</span><small>{run.error_codes.join("、") || `${formatChinaTime(run.started_at)}（北京时间）`}</small></article>) : <div className="quiet-state"><strong>还没有自动任务记录</strong><p>保存设置后可立即运行一次，确认提醒、数据来源和通知链路。</p></div>}<details className="audit-details"><summary>记录保留规则</summary><p>保留最近 30 天、最多 200 条运行记录；连续相同失败会合并显示。</p></details></section></div>;
 }
 
@@ -548,6 +575,6 @@ export function SettingsPage() {
     {section === "notifications" && configuration.data && <ChannelSettings status={configuration.data} />}
     {section === "automation" && configuration.data && <SchedulerSettings status={configuration.data} />}
     {section === "data" && <><WorkspaceTransfer /><DataGovernance /></>}
-    {section === "advanced" && <>{configuration.data && <ConfigurationForm status={configuration.data} advanced />}<section className="panel"><div className="panel-heading"><div><p className="eyebrow">出现问题时使用</p><h2>运行与诊断</h2></div><span>高级功能</span></div><p>服务状态、智能功能运行记录和后台任务主要用于排查问题，普通使用无需关注。</p><div className="form-actions"><a className="download-button secondary" href="/status">查看服务状态</a><a className="download-button secondary" href="/agent-runs">查看智能功能记录</a><a className="download-button secondary" href="/jobs">查看后台任务</a><button className="secondary" type="button" disabled={reopen.isPending} onClick={() => reopen.mutate()}>重新进入初始化向导</button></div>{reopen.error && <p className="form-error">{reopen.error.message}</p>}</section><section className="panel"><div className="panel-heading"><div><p className="eyebrow">设置修改记录</p><h2>配置变更历史</h2></div><span>{changes.data?.total ?? 0} 条</span></div><div>{changes.data?.items.map(item => <article className="change-row" key={item.id}><strong>配置版本 {item.previous_revision} → {item.new_revision}</strong><span>{item.reason} · {item.activation_effect === "hot_reload" ? "已即时生效" : item.activation_effect === "restart_required" ? "重启后生效" : item.activation_effect}</span><small>{item.changed_paths.join("、")} · {formatChinaTime(item.created_at)}（北京时间）</small></article>)}</div></section></>}
+    {section === "advanced" && <>{configuration.data && <ConfigurationForm status={configuration.data} advanced />}<section className="panel"><div className="panel-heading"><div><p className="eyebrow">出现问题时使用</p><h2>运行与诊断</h2></div><span>高级功能</span></div><p>服务状态和后台任务主要用于排查问题，普通使用无需关注。</p><div className="form-actions"><a className="download-button secondary" href="/status">查看服务状态</a><a className="download-button secondary" href="/jobs">查看后台任务</a><button className="secondary" type="button" disabled={reopen.isPending} onClick={() => reopen.mutate()}>重新进入初始化向导</button></div>{reopen.error && <p className="form-error">{reopen.error.message}</p>}</section><section className="panel"><div className="panel-heading"><div><p className="eyebrow">设置修改记录</p><h2>配置变更历史</h2></div><span>{changes.data?.total ?? 0} 条</span></div><div>{changes.data?.items.map(item => <article className="change-row" key={item.id}><strong>配置版本 {item.previous_revision} → {item.new_revision}</strong><span>{item.reason} · {item.activation_effect === "hot_reload" ? "已即时生效" : item.activation_effect === "restart_required" ? "重启后生效" : item.activation_effect}</span><small>{item.changed_paths.join("、")} · {formatChinaTime(item.created_at)}（北京时间）</small></article>)}</div></section></>}
   </>;
 }

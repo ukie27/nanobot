@@ -43,7 +43,8 @@ const AGENT_TASK_LABELS: Record<string, string> = {
   profile_fact_extraction: "职业事实提取",
   fact_extraction: "职业事实提取",
   mail_intelligence: "招聘邮件分析",
-  profile_insight: "职业档案洞察",
+  profile_insight: "个人档案洞察",
+  profile_fact_revision: "个人档案修改",
   job_fit: "岗位匹配分析",
   resume_direction: "简历方向建议",
   resume_drafting: "申请材料撰写",
@@ -203,7 +204,7 @@ function ProfileBundleReview({
         {onToggle && <button type="button" className="secondary" aria-expanded={expanded} onClick={onToggle}>
           {expanded ? "收起内容" : "展开核对"}
         </button>}
-        {!onToggle && <Link className="download-button secondary" to="/reviews">返回审查中心</Link>}
+        {!onToggle && <Link className="download-button secondary" to="/reviews">返回待我处理</Link>}
         {pendingFacts.length > 0 && <details className="secondary-actions">
           <summary>更多操作</summary>
           <button type="button" className="danger" disabled={busy} onClick={() => rejectAll.mutate()}>
@@ -276,13 +277,16 @@ export function ReviewCenterPage({ profileOnly = false }: { profileOnly?: boolea
       ]);
     },
   });
-  const visibleItems = (query.data?.items ?? []).filter(item => !profileOnly || (
-    (item.entity_type === "review_bundle" && item.bundle_type === "profile_section")
-    || item.entity_type === "candidate_fact"
-  ));
+  const visibleItems = (query.data?.items ?? []).filter(item => {
+    const isLegacyProfileReview = (
+      (item.entity_type === "review_bundle" && item.bundle_type === "profile_section")
+      || item.entity_type === "candidate_fact"
+    );
+    return profileOnly ? isLegacyProfileReview : !isLegacyProfileReview;
+  });
   return <>
-    <header className="page-header"><div><p className="eyebrow">{profileOnly ? "我的资料 / 内容确认" : "待我确认"}</p><h1>{profileOnly ? "确认档案内容" : "审查中心"}</h1></div><span className="health-pill">{visibleItems.length} 项</span></header>
-    <section className="notice opportunity-note"><strong>智能分析只会生成待确认建议</strong><p>职业事实可直接在本页展开核对；只有你确认后，内容才会写入正式记录。</p></section>
+    <header className="page-header"><div><p className="eyebrow">{profileOnly ? "我的资料 / 内容确认" : "跨业务待办"}</p><h1>{profileOnly ? "确认档案内容" : "待我处理"}</h1></div><span className="health-pill">{visibleItems.length} 项</span></header>
+    <section className="notice opportunity-note"><strong>这里只显示需要你决定的变化</strong><p>个人档案由 Agent 分析和确定性校验后自动维护；有歧义的申请、邮件和面试变化会留在这里。</p></section>
     <div className="opportunity-filters"><button className={status === "open" ? "" : "secondary"} onClick={() => setStatus("open")}>待处理</button><button className={status === "resolved" ? "" : "secondary"} onClick={() => setStatus("resolved")}>已处理</button></div>
     {(query.error || facts.error || resolve.error) && <section className="notice error">{query.error?.message ?? facts.error?.message ?? resolve.error?.message}</section>}
     <section className="review-runtime-list">{visibleItems.map((item) => {
@@ -344,11 +348,11 @@ export function ReviewBundlePage() {
   if (review.error || !review.data) return <section className="notice error">{review.error?.message ?? "确认内容不存在。"}</section>;
   const bundle = review.data;
   if (bundle.bundle_type === "mail_analysis") {
-    return <><Link className="back-link" to="/reviews">返回审查中心</Link><header className="page-header"><div><p className="eyebrow">招聘邮件分析</p><h1>{bundle.title}</h1><p>{bundle.summary}</p></div></header><section className="panel"><h2>为什么需要确认</h2><p>一封邮件可能同时包含进度、日程和准备事项。请在邮件详情中结合原文证据一次处理，系统不会仅凭分析结果直接修改申请档案。</p><div className="form-actions"><Link className="download-button" to={bundle.target_url}>查看邮件、证据和处理结果</Link><Link className="download-button secondary" to="/reviews">返回审查中心</Link></div></section></>;
+    return <><Link className="back-link" to="/reviews">返回待我处理</Link><header className="page-header"><div><p className="eyebrow">招聘邮件分析</p><h1>{bundle.title}</h1><p>{bundle.summary}</p></div></header><section className="panel"><h2>为什么需要确认</h2><p>一封邮件可能同时包含进度、日程和准备事项。请在邮件详情中结合原文证据一次处理，系统不会仅凭分析结果直接修改申请档案。</p><div className="form-actions"><Link className="download-button" to={bundle.target_url}>查看邮件、证据和处理结果</Link><Link className="download-button secondary" to="/reviews">返回待我处理</Link></div></section></>;
   }
-  return <><Link className="back-link" to="/reviews">返回审查中心</Link>
-    <header className="page-header"><div><p className="eyebrow">职业档案业务块</p><h1>{bundle.title}</h1><p>{bundle.summary}</p></div></header>
-    <section className="notice opportunity-note"><strong>确认后会发生什么</strong><p>确认内容将进入可信职业档案，可用于岗位匹配和申请材料；拒绝内容只保留审计记录，不参与后续生成。</p></section>
+  return <><Link className="back-link" to="/reviews">返回待我处理</Link>
+    <header className="page-header"><div><p className="eyebrow">历史个人档案审查</p><h1>{bundle.title}</h1><p>{bundle.summary}</p></div></header>
+    <section className="notice opportunity-note"><strong>这是旧版保留记录</strong><p>新导入资料不会再创建个人档案确认任务。</p></section>
     <ProfileBundleReview bundle={bundle} factMap={factMap} expanded onRefresh={refresh} />
   </>;
 }

@@ -24,6 +24,14 @@ class CareerInstanceLock:
             raise InstanceAlreadyRunningError(
                 f"Another Career service instance holds {self.path}"
             ) from exc
+        except PermissionError as exc:
+            # Windows may report an actively held lock as WinError 5 instead
+            # of the Timeout raised by other filelock backends.
+            if not self.path.exists():
+                raise
+            raise InstanceAlreadyRunningError(
+                f"Another Career service instance holds {self.path}"
+            ) from exc
 
     def release(self) -> None:
         if self._lock.is_locked:

@@ -88,6 +88,11 @@ class CareerAgentRuntime:
             return None
         configuration = document.configuration
         task = getattr(configuration.agents.tasks, task_name)
+        if (
+            task_name == "profile_revision"
+            and (not task.enabled or not task.provider_id)
+        ):
+            task = configuration.agents.tasks.fact_extraction
         if not task.enabled or not task.provider_id:
             return None
         provider_config = configuration.providers.get(task.provider_id)

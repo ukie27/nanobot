@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -16,7 +16,15 @@ class StrictModel(BaseModel):
 
 class GeneralConfiguration(StrictModel):
     locale: Literal["zh-CN", "en-US"] = "zh-CN"
-    timezone: str = Field(default="Asia/Shanghai", min_length=1, max_length=64)
+    timezone: Literal[
+        "Asia/Shanghai",
+        "Asia/Tokyo",
+        "Asia/Singapore",
+        "Europe/London",
+        "America/New_York",
+        "America/Los_Angeles",
+        "UTC",
+    ] = "Asia/Shanghai"
     date_format: Literal["yyyy-MM-dd", "yyyy/MM/dd"] = "yyyy-MM-dd"
     open_browser_on_start: bool = True
 
@@ -78,6 +86,7 @@ class AgentTaskConfiguration(StrictModel):
 
 class AgentTaskMappings(StrictModel):
     fact_extraction: AgentTaskConfiguration = Field(default_factory=AgentTaskConfiguration)
+    profile_revision: AgentTaskConfiguration = Field(default_factory=AgentTaskConfiguration)
     mail_intelligence: AgentTaskConfiguration = Field(default_factory=AgentTaskConfiguration)
     profile_insight: AgentTaskConfiguration = Field(default_factory=AgentTaskConfiguration)
     job_fit: AgentTaskConfiguration = Field(default_factory=AgentTaskConfiguration)
@@ -215,10 +224,25 @@ class SchedulerConfiguration(StrictModel):
     enabled: bool = True
     poll_seconds: int = Field(default=60, ge=10, le=3600)
     reminders_enabled: bool = True
+    # Retained only so configuration files written before the task split still load.
     connector_jobs_enabled: bool = False
-    profile_maintenance_enabled: bool = False
+    nowcoder_sync_enabled: bool = False
+    mail_sync_enabled: bool = False
+    profile_maintenance_enabled: bool = True
+    profile_maintenance_interval_days: int = Field(default=3, ge=1, le=30)
     profile_maintenance_time: str = "21:30"
     channel_dispatch_enabled: bool = False
+
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate_legacy_connector_switch(cls, values: Any) -> Any:
+        if not isinstance(values, dict):
+            return values
+        migrated = dict(values)
+        legacy_enabled = bool(migrated.get("connector_jobs_enabled", False))
+        migrated.setdefault("nowcoder_sync_enabled", legacy_enabled)
+        migrated.setdefault("mail_sync_enabled", legacy_enabled)
+        return migrated
 
     @field_validator("profile_maintenance_time")
     @classmethod

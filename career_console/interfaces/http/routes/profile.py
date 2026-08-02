@@ -15,6 +15,7 @@ from career_console.interfaces.http.schemas import (
     DocumentListResponse,
     DocumentResponse,
     FactActionRequest,
+    FactAgentRevisionRequest,
     FactEditRequest,
     ManualFactRequest,
     TextImportRequest,
@@ -57,6 +58,12 @@ def import_document(
 @router.post("/documents/import-text", response_model=DocumentResponse, status_code=201)
 def import_text(request: Request, body: TextImportRequest) -> DocumentResponse:
     result = request.app.state.profile_service.import_text(name=body.name, text=body.text)
+    return DocumentResponse.model_validate(result)
+
+
+@router.post("/documents/{document_id}/reprocess", response_model=DocumentResponse)
+def reprocess_document(document_id: str, request: Request) -> DocumentResponse:
+    result = request.app.state.profile_service.reprocess_document(document_id=document_id)
     return DocumentResponse.model_validate(result)
 
 
@@ -113,6 +120,20 @@ def edit_fact(fact_id: str, request: Request, body: FactEditRequest) -> Candidat
         action="edit",
         value=body.value,
         reason=body.reason or "Edited by user",
+    )
+    return CandidateFactResponse.model_validate(result)
+
+
+@router.post("/facts/{fact_id}/agent-revise", response_model=CandidateFactResponse)
+def agent_revise_fact(
+    fact_id: str,
+    request: Request,
+    body: FactAgentRevisionRequest,
+) -> CandidateFactResponse:
+    result = request.app.state.profile_service.revise_fact(
+        fact_id=fact_id,
+        expected_version=body.expected_version,
+        instruction=body.instruction,
     )
     return CandidateFactResponse.model_validate(result)
 

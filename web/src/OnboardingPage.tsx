@@ -29,7 +29,7 @@ import {
 const STEPS = [
   { key: "workspace", label: "工作区" },
   { key: "provider", label: "AI 能力" },
-  { key: "profile", label: "职业档案" },
+  { key: "profile", label: "个人档案" },
   { key: "recruitment_sources", label: "招聘来源" },
   { key: "mail", label: "招聘邮件" },
   { key: "channel", label: "通知渠道" },
@@ -39,7 +39,7 @@ const STEPS = [
 const CAPABILITY_LABELS: Record<string, string> = {
   workspace: "正式工作区",
   provider: "AI Provider",
-  profile: "职业档案",
+  profile: "个人档案",
   mail: "只读邮箱",
   opencli: "OpenCLI / 牛客",
   channel: "通知渠道",
@@ -214,7 +214,7 @@ export function OnboardingPage() {
     </section>}
 
     {step === 1 && configuration.data && <section className="onboarding-stage"><div className="setup-intro"><p className="eyebrow">可选能力</p><h2>AI 分析与生成</h2><p>配置后可使用邮件结构化分析、语义岗位匹配和简历生成；不配置时，手工档案、确定性匹配和投递管理仍可使用。</p></div><ProviderAgentConfiguration status={configuration.data} /></section>}
-    {step === 2 && <section className="onboarding-stage"><div className="setup-intro"><p className="eyebrow">个人资料</p><h2>建立职业档案</h2><p>导入简历后会生成候选事实。导入完成后可进入事实审查，只有确认过的内容才会用于匹配和材料生成。</p></div><DocumentsPage /></section>}
+    {step === 2 && <section className="onboarding-stage"><div className="setup-intro"><p className="eyebrow">个人资料</p><h2>建立个人档案</h2><p>导入简历后，Agent 会整理有效信息并直接维护个人档案。</p></div><DocumentsPage /></section>}
     {step === 3 && <section className="onboarding-stage"><div className="setup-intro"><p className="eyebrow">招聘信息来源</p><h2>连接每日招聘</h2><p>OpenCLI 是外部应用，牛客负责每天获取当天新增信息；历史数据只在你主动选择时回看，最长 30 天。</p><button className="secondary" type="button" onClick={() => window.open("https://www.nowcoder.com/jobs/school/schedule?tab=3", "_blank", "noopener,noreferrer")}>打开牛客登录页</button></div><DataSourceSettings embedded /><DataSourcesPage setupOnly /></section>}
     {step === 4 && <section className="onboarding-stage"><div className="setup-intro"><p className="eyebrow">申请进度来源</p><h2>连接招聘邮箱</h2><p>邮箱以只读方式扫描最近 30 天的已读和未读邮件，为申请进度、日程和注意事项提供证据。</p></div><MessageCenterPage setupOnly /></section>}
     {step === 5 && configuration.data && <section className="onboarding-stage"><div className="setup-intro"><p className="eyebrow">提醒出口</p><h2>通知渠道</h2><p>QQ 只用于发送任务提醒、进度变化和系统告警。暂时不需要外部通知时可以跳过。</p></div><ChannelSettings status={configuration.data} /></section>}

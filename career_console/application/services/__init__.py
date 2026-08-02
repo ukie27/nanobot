@@ -28,6 +28,9 @@ from career_console.application.services.resume_direction import (
 )
 from career_console.application.services.review_maintenance import ReviewMaintenanceService
 from career_console.application.services.runtime import RuntimeApplicationService
+from career_console.application.services.standalone_resumes import (
+    StandaloneResumeApplicationService,
+)
 from career_console.application.services.tasks import TaskApplicationService
 
 __all__ = [
@@ -36,6 +39,7 @@ __all__ = [
     "NowcoderConnectorApplicationService",
     "OpportunityApplicationService",
     "RuntimeApplicationService",
+    "StandaloneResumeApplicationService",
     "ReviewMaintenanceService",
     "ResumeDirectionApplicationService",
     "GovernanceApplicationService",

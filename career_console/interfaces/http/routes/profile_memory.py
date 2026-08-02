@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
@@ -16,13 +16,6 @@ class PreferenceCommand(BaseModel):
     model_config = ConfigDict(extra="forbid")
     value: Any
     expected_version: int | None = Field(default=None, ge=1)
-
-
-class ResolveMemoryProposal(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    expected_version: int = Field(ge=1)
-    resolution: Literal["confirmed", "rejected"]
-    reason: str = Field(min_length=1, max_length=500)
 
 
 @router.get("")
@@ -67,18 +60,3 @@ def run_impacts(request: Request) -> dict[str, int]:
     while processed < 100 and request.app.state.profile_impact_service.process_next():
         processed += 1
     return {"queued": queued, "processed": processed}
-
-
-@router.post("/{entity_type}/{entity_id}/resolve")
-def resolve_proposal(
-    entity_type: Literal["profile_insight", "strategy_snapshot"],
-    entity_id: str,
-    body: ResolveMemoryProposal,
-    request: Request,
-) -> dict[str, Any]:
-    try:
-        return request.app.state.profile_memory_gateway.resolve(
-            entity_type=entity_type, entity_id=entity_id, **body.model_dump()
-        )
-    except (ValueError, LookupError, CareerDomainError) as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc

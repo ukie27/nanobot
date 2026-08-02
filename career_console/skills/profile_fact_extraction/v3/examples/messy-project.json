@@ -1,0 +1,23 @@
+{
+  "input": {
+    "document_id": "doc-001",
+    "document_text": "项 目 经 历\n校园招聘看板\n我在里面参与接口这块，python / fast api\n做了缓存，最后接口响应时间降低30%\n"
+  },
+  "output": {
+    "schemaVersion": "candidate_profile_object.v3",
+    "objects": [
+      {
+        "category": "project",
+        "objectKey": "project:校园招聘看板",
+        "title": "校园招聘看板",
+        "content": "项目：校园招聘看板\n关键行动：参与接口开发并实现缓存。\n技术：Python、FastAPI\n成果：接口响应时间降低 30%。",
+        "evidenceTexts": [
+          "校园招聘看板",
+          "我在里面参与接口这块，python / fast api",
+          "做了缓存，最后接口响应时间降低30%"
+        ],
+        "confidence": 0.96
+      }
+    ]
+  }
+}

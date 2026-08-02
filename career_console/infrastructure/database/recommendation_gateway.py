@@ -92,7 +92,7 @@ class SqlAlchemyRecommendationGateway:
                     select(ProfileInsightProposalModel)
                     .where(
                         ProfileInsightProposalModel.profile_id == profile.id,
-                        ProfileInsightProposalModel.status == "confirmed",
+                        ProfileInsightProposalModel.status.in_(("active", "confirmed")),
                     )
                     .order_by(ProfileInsightProposalModel.created_at.desc())
                     .limit(50)

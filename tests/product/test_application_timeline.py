@@ -636,9 +636,9 @@ def test_upgrade_from_part3_creates_backup_and_application_schema(tmp_path: Path
     with TestClient(create_app(settings)) as client:
         doctor = client.get("/api/v1/system/status")
         assert doctor.status_code == 200
-        assert doctor.json()["database_revision"] == "20260729_0031"
+        assert doctor.json()["database_revision"] == "20260801_0034"
 
-    assert list(settings.backups_dir.glob("*pre-202607290031.sqlite3"))
+    assert list(settings.backups_dir.glob("*pre-202608010034.sqlite3"))
     with sqlite3.connect(settings.database_path) as connection:
         tables = {
             row[0]

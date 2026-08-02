@@ -56,17 +56,12 @@ class ProfileMemoryApplicationService:
             counters["profile_insight_skipped"] = 1
             insight_status = "skipped_no_confirmed_facts"
 
-        strategy = None
-        if local.weekday() == 0:
-            strategy = self.gateway.generate_strategy_proposal(now=started)
-            counters["profile_strategy_processed"] = 1
-            counters["profile_jobs_processed"] += 1
         return {
             **counters,
             "digest_id": digest["id"],
             "insight_ids": insight_ids,
             "insight_status": insight_status,
-            "strategy_id": strategy["id"] if strategy else None,
+            "strategy_id": None,
             "business_date": local.date().isoformat(),
             "business_timezone": "Asia/Shanghai",
         }
@@ -78,7 +73,21 @@ class ProfileMemoryApplicationService:
                 code="profile_insight_unavailable",
             )
         context = self.gateway.profile_insight_context()
-        encoded = json.dumps(context, ensure_ascii=False, sort_keys=True, default=str)
+        generation_policy = {
+            "schema_version": getattr(
+                self.analyzer, "schema_version", "profile_insight.v3"
+            ),
+            "prompt_version": getattr(
+                self.analyzer, "prompt_version", "profile_insight.v5"
+            ),
+            "skill_version": getattr(self.analyzer, "skill_version", None),
+        }
+        encoded = json.dumps(
+            {"context": context, "generation_policy": generation_policy},
+            ensure_ascii=False,
+            sort_keys=True,
+            default=str,
+        )
         input_hash = hashlib.sha256(encoded.encode("utf-8")).hexdigest()
         existing = self.gateway.existing_profile_insights(input_hash=input_hash)
         if existing is not None:
@@ -88,14 +97,25 @@ class ProfileMemoryApplicationService:
         try:
             result = self.analyzer.analyze(context=context)
             confirmed_ids = {item["id"] for item in context["confirmedFacts"]}
-            referenced_ids = {
+            improvement_ids = {
+                item["id"] for item in context["confirmedInterviewImprovements"]
+            }
+            referenced_fact_ids = {
                 fact_id
                 for item in result.insights
                 for fact_id in [*item.evidence_fact_ids, *item.counter_evidence_fact_ids]
             }
-            if not referenced_ids <= confirmed_ids:
+            referenced_improvement_ids = {
+                improvement_id
+                for item in result.insights
+                for improvement_id in item.evidence_improvement_ids
+            }
+            if (
+                not referenced_fact_ids <= confirmed_ids
+                or not referenced_improvement_ids <= improvement_ids
+            ):
                 raise CareerDomainError(
-                    "档案洞察引用了不存在或未确认的 Fact ID。",
+                    "档案洞察引用了不存在或未确认的依据。",
                     code="profile_insight_evidence_invalid",
                 )
         except Exception as exc:
@@ -129,7 +149,7 @@ class ProfileMemoryApplicationService:
             "implementation": getattr(self.analyzer, "name", "profile_insight"),
             "provider": type(provider).__name__ if provider is not None else None,
             "model": getattr(self.analyzer, "model", None),
-            "prompt_version": getattr(self.analyzer, "prompt_version", "profile_insight.v1"),
+            "prompt_version": getattr(self.analyzer, "prompt_version", "profile_insight.v5"),
             "skill_version": getattr(self.analyzer, "skill_version", None),
             "created_at": started_at,
             "duration_ms": max(0, round((perf_counter() - started) * 1000)),

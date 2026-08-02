@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
+from career_console.infrastructure.configuration.schema import SchedulerConfiguration
 from career_console.infrastructure.scheduling import CareerSchedulerRuntime
 from career_console.infrastructure.database.models import SchedulerRunModel
 from career_console.infrastructure.settings import CareerSettings
@@ -15,8 +16,12 @@ from career_console.interfaces.http import create_app
 def _scheduler(**overrides) -> dict:
     return {
         "enabled": True, "poll_seconds": 30, "reminders_enabled": True,
-        "connector_jobs_enabled": False, "profile_maintenance_enabled": False,
-        "profile_maintenance_time": "21:30", "channel_dispatch_enabled": True,
+        "connector_jobs_enabled": False,
+        "nowcoder_sync_enabled": False, "mail_sync_enabled": False,
+        "profile_maintenance_enabled": False,
+        "profile_maintenance_time": "21:30",
+        "profile_maintenance_interval_days": 3,
+        "channel_dispatch_enabled": True,
         **overrides,
     }
 
@@ -73,6 +78,58 @@ def test_scheduler_configuration_controls_execution_and_audits(tmp_path: Path) -
         assert dispatched == [{"id": "unread", "status": "unread"}]
 
 
+def test_legacy_connector_switch_migrates_to_independent_controls() -> None:
+    values = SchedulerConfiguration(
+        enabled=True,
+        connector_jobs_enabled=True,
+    )
+    assert values.nowcoder_sync_enabled is True
+    assert values.mail_sync_enabled is True
+
+
+def test_connector_automation_controls_are_independent(tmp_path: Path) -> None:
+    settings = CareerSettings(data_dir=tmp_path / "workspace")
+    with TestClient(create_app(settings)) as client:
+        runtime = client.app.state.scheduler_runtime
+        calls = []
+        runtime.nowcoder_service = SimpleNamespace(
+            run_due=lambda **_kwargs: calls.append("nowcoder") or {"created_count": 1}
+        )
+        runtime.mail_service = SimpleNamespace(
+            run_due=lambda: calls.append("mail") or {"new_message_count": 1},
+            process_next_analysis_job=lambda: False,
+        )
+        revision = client.get("/api/v1/configuration").json()["revision"]
+        response = client.put("/api/v1/scheduler/configuration", json={
+            "expected_revision": revision,
+            "scheduler": _scheduler(
+                reminders_enabled=False,
+                nowcoder_sync_enabled=True,
+                mail_sync_enabled=False,
+                channel_dispatch_enabled=False,
+            ),
+        })
+        assert response.status_code == 200
+
+        runtime.run_once(trigger_type="manual")
+        assert calls == ["nowcoder"]
+
+        revision = response.json()["configuration_revision"]
+        response = client.put("/api/v1/scheduler/configuration", json={
+            "expected_revision": revision,
+            "scheduler": _scheduler(
+                reminders_enabled=False,
+                nowcoder_sync_enabled=False,
+                mail_sync_enabled=True,
+                channel_dispatch_enabled=False,
+            ),
+        })
+        assert response.status_code == 200
+
+        runtime.run_once(trigger_type="manual")
+        assert calls == ["nowcoder", "mail"]
+
+
 def test_profile_maintenance_uses_china_clock() -> None:
     before = datetime(2026, 7, 26, 13, 29, tzinfo=UTC)
     due = datetime(2026, 7, 26, 13, 30, tzinfo=UTC)
@@ -80,7 +137,9 @@ def test_profile_maintenance_uses_china_clock() -> None:
     assert CareerSchedulerRuntime._profile_due("21:30", due) is True
 
 
-def test_profile_maintenance_runs_only_once_per_china_day(tmp_path: Path) -> None:
+def test_profile_maintenance_respects_configured_china_day_interval(
+    tmp_path: Path,
+) -> None:
     settings = CareerSettings(data_dir=tmp_path / "workspace")
     with TestClient(create_app(settings)) as client:
         runtime = client.app.state.scheduler_runtime
@@ -108,7 +167,14 @@ def test_profile_maintenance_runs_only_once_per_china_day(tmp_path: Path) -> Non
         now = datetime(2026, 7, 26, 13, 30, tzinfo=UTC)
         runtime.run_once(trigger_type="manual", now=now)
         runtime.run_once(trigger_type="manual", now=now)
-        assert calls == ["profile"]
+        runtime.run_once(trigger_type="manual", now=now + timedelta(days=1))
+        runtime.run_once(trigger_type="manual", now=now + timedelta(days=3))
+        assert calls == ["profile", "profile"]
+        latest = client.get("/api/v1/scheduler/runs").json()["items"][0]
+        assert latest["counters"]["profile_digest_generated"] == 1
+
+        runtime.run_once(trigger_type="manual", now=now + timedelta(days=3))
+        assert calls == ["profile", "profile"]
         latest = client.get("/api/v1/scheduler/runs").json()["items"][0]
         assert latest["counters"]["profile_digest_generated"] == 0
 

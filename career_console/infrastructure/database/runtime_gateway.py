@@ -26,6 +26,7 @@ _REVIEW_TARGETS = {
     "strategy_snapshot": "/profile",
     "job_fit_proposal": "/job-posts",
     "resume_direction_proposal": "/job-posts",
+    "standalone_resume_proposal": "/materials",
     "interview_feedback": "/interviews",
 }
 

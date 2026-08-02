@@ -630,8 +630,8 @@ def test_upgrade_from_part5_creates_backup_and_connector_schema(tmp_path: Path) 
     command.upgrade(alembic_config(settings), "20260724_0006")
     with TestClient(create_app(settings)) as client:
         assert client.get("/api/v1/connectors/boss").status_code == 200
-    assert database_revision(settings.database_path) == "20260729_0031"
-    assert list(settings.backups_dir.glob("*pre-202607290031.sqlite3"))
+    assert database_revision(settings.database_path) == "20260801_0034"
+    assert list(settings.backups_dir.glob("*pre-202608010034.sqlite3"))
     with sqlite3.connect(settings.database_path) as connection:
         tables = {
             row[0]

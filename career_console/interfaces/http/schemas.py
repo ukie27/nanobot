@@ -176,7 +176,9 @@ class DocumentResponse(BaseModel):
     fact_source_count: int
     duplicate: bool = False
     proposed_fact_count: int | None = None
+    maintained_fact_count: int | None = None
     extracted_candidate_count: int | None = None
+    superseded_fact_count: int | None = None
     created_at: datetime
 
 
@@ -204,6 +206,11 @@ class FactActionRequest(BaseModel):
 
 class FactEditRequest(FactActionRequest):
     value: str = Field(min_length=1, max_length=10_000)
+
+
+class FactAgentRevisionRequest(BaseModel):
+    expected_version: int = Field(ge=1)
+    instruction: str = Field(min_length=1, max_length=2_000)
 
 
 class BatchFactItem(BaseModel):

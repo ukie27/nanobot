@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ProfileFactRevisionInput",
+  "type": "object",
+  "required": ["fact_id", "category", "field_key", "current_value", "instruction", "evidence_texts"],
+  "properties": {
+    "fact_id": {"type": "string", "minLength": 1},
+    "category": {"enum": ["basic", "education", "internship", "work", "project", "skill", "award", "certificate", "preference", "constraint"]},
+    "field_key": {"type": "string", "minLength": 1, "maxLength": 100},
+    "current_value": {"type": "string", "minLength": 1, "maxLength": 10000},
+    "instruction": {"type": "string", "minLength": 1, "maxLength": 2000},
+    "evidence_texts": {
+      "type": "array",
+      "maxItems": 100,
+      "items": {"type": "string", "minLength": 1, "maxLength": 2000}
+    }
+  },
+  "additionalProperties": false
+}

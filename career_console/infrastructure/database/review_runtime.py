@@ -120,12 +120,19 @@ def ensure_review_bundle(
         )
         session.add(bundle)
         session.flush()
-    elif bundle.status == "open":
+    else:
         bundle.title = title[:300]
         bundle.summary = summary[:5_000]
         bundle.priority = priority
         bundle.agent_run_id = agent_run_id or bundle.agent_run_id
         bundle.updated_at = now
+        if bundle.status != "open":
+            bundle.status = "open"
+            bundle.resolved_at = None
+            bundle.resolution = None
+            bundle.resolution_reason = None
+            bundle.resolved_by = None
+            bundle.version += 1
     return bundle
 
 

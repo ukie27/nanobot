@@ -6,7 +6,7 @@ import { ApiError, cancelBackgroundJob, getBackgroundJobs, getOnboardingStatus, 
 import { ApplicationDetailPage, ApplicationReviewPage, ApplicationsPage } from "./ApplicationPages";
 import { JobDetailPage, JobPoolPage } from "./JobPages";
 import { InterviewCenterPage, InterviewDetailPage } from "./InterviewPages";
-import { MaterialDetailPage, MaterialsPage, ResumeDiffPage } from "./MaterialPages";
+import { JobMaterialsPage, MaterialDetailPage, MaterialsPage, ResumeDetailPage, ResumeDiffPage } from "./MaterialPages";
 import { MessageCenterPage } from "./MailPages";
 import { OpportunityPage } from "./OpportunityPages";
 import { DocumentsPage, ManualFactPage, ProfilePage } from "./ProfilePages";
@@ -52,12 +52,19 @@ function NavigationGroup({ label, paths, children, onNavigate }: NavigationGroup
 function ProductLayout() {
   const [mobileNavigationOpen, setMobileNavigationOpen] = useState(false);
   const location = useLocation();
-  const profileSubpage = location.pathname.startsWith("/profile/");
+  const jobMaterialsMatch = location.pathname.match(/^\/job-posts\/([^/]+)\/materials$/);
+  const contextualSubpage = location.pathname.startsWith("/profile/")
+    ? { label: "返回个人资料", to: "/profile" }
+    : location.pathname.startsWith("/resumes/")
+      ? { label: "返回简历库", to: "/materials" }
+      : jobMaterialsMatch
+        ? { label: "返回岗位详情", to: `/job-posts/${jobMaterialsMatch[1]}` }
+        : null;
   const closeNavigation = () => setMobileNavigationOpen(false);
   return (
-    <div className={`app-shell ${profileSubpage ? "profile-subpage-shell" : ""}`}>
+    <div className={`app-shell ${contextualSubpage ? "profile-subpage-shell" : ""}`}>
       <a className="skip-link" href="#main-content">跳到主要内容</a>
-      {!profileSubpage && <header className="mobile-header">
+      {!contextualSubpage && <header className="mobile-header">
         <Brand />
         <button
           type="button"
@@ -69,12 +76,12 @@ function ProductLayout() {
           {mobileNavigationOpen ? "关闭" : "菜单"}
         </button>
       </header>}
-      {profileSubpage && <header className="profile-subpage-header">
+      {contextualSubpage && <header className="profile-subpage-header">
         <Brand />
-        <NavLink className="back-link" end to="/profile">返回我的资料</NavLink>
+        <NavLink className="back-link" end to={contextualSubpage.to}>{contextualSubpage.label}</NavLink>
       </header>}
-      {!profileSubpage && mobileNavigationOpen && <button className="sidebar-backdrop" aria-label="关闭导航" onClick={closeNavigation} />}
-      {!profileSubpage && <aside id="primary-sidebar" className={`sidebar ${mobileNavigationOpen ? "mobile-open" : ""}`}>
+      {!contextualSubpage && mobileNavigationOpen && <button className="sidebar-backdrop" aria-label="关闭导航" onClick={closeNavigation} />}
+      {!contextualSubpage && <aside id="primary-sidebar" className={`sidebar ${mobileNavigationOpen ? "mobile-open" : ""}`}>
         <div className="desktop-brand"><Brand /></div>
         <p className="navigation-intro">按求职任务组织功能。当前要做什么，就从对应分组进入。</p>
         <nav aria-label="主导航">
@@ -89,26 +96,25 @@ function ProductLayout() {
             <NavLink to="/tasks">任务与日程</NavLink>
             <NavLink to="/interviews">面试中心</NavLink>
           </NavigationGroup>
-          <NavigationGroup label="我的资料" paths={["/profile", "/materials"]} onNavigate={closeNavigation}>
-            <NavLink to="/profile">我的经历</NavLink>
-            <NavLink to="/materials">简历与申请材料</NavLink>
+          <NavigationGroup label="个人资料" paths={["/profile", "/materials"]} onNavigate={closeNavigation}>
+            <NavLink to="/profile">个人档案</NavLink>
+            <NavLink to="/materials">我的简历</NavLink>
           </NavigationGroup>
-          <NavigationGroup label="消息与确认" paths={["/message-center", "/reviews"]} onNavigate={closeNavigation}>
-            <NavLink to="/message-center">招聘邮件</NavLink>
-            <NavLink to="/reviews">待我确认</NavLink>
-          </NavigationGroup>
+          <NavLink to="/message-center" onClick={closeNavigation}>招聘邮件</NavLink>
+          <NavLink to="/reviews" onClick={closeNavigation}>待我处理</NavLink>
+          <NavLink to="/agent-runs" onClick={closeNavigation}>智能功能记录</NavLink>
           <NavLink to="/settings" onClick={closeNavigation}>设置</NavLink>
           <NavLink to="/help" onClick={closeNavigation}>帮助</NavLink>
         </nav>
       </aside>}
-      <main className={`content ${profileSubpage ? "profile-subpage-content" : ""}`} id="main-content" tabIndex={-1}>
+      <main className={`content ${contextualSubpage ? "profile-subpage-content" : ""}`} id="main-content" tabIndex={-1}>
         <Routes>
           <Route path="/" element={<Navigate to="/dashboard" replace />} />
           <Route path="/dashboard" element={<DashboardPage />} />
           <Route path="/workspace" element={<WorkspacePage />} />
           <Route path="/profile" element={<ProfilePage />} />
           <Route path="/profile/import" element={<DocumentsPage />} />
-          <Route path="/profile/reviews" element={<ReviewCenterPage profileOnly />} />
+          <Route path="/profile/reviews" element={<Navigate to="/profile" replace />} />
           <Route path="/profile/manual" element={<ManualFactPage />} />
           <Route path="/documents" element={<Navigate to="/profile/import" replace />} />
           <Route path="/review" element={<Navigate to="/reviews?category=profile" replace />} />
@@ -117,7 +123,9 @@ function ProductLayout() {
           <Route path="/opportunities" element={<OpportunityPage />} />
           <Route path="/job-posts" element={<JobPoolPage />} />
           <Route path="/job-posts/:id" element={<JobDetailPage />} />
-          <Route path="/materials" element={<MaterialsPage />} />
+          <Route path="/materials" element={<MaterialsRoute />} />
+          <Route path="/job-posts/:id/materials" element={<JobMaterialsPage />} />
+          <Route path="/resumes/:id" element={<ResumeDetailPage />} />
           <Route path="/materials/:id" element={<MaterialDetailPage />} />
           <Route path="/resume-diff/:fromVersionId/:toVersionId" element={<ResumeDiffPage />} />
           <Route path="/applications" element={<ApplicationsPage />} />
@@ -138,6 +146,14 @@ function ProductLayout() {
       </main>
     </div>
   );
+}
+
+function MaterialsRoute() {
+  const location = useLocation();
+  const jobId = new URLSearchParams(location.search).get("jobId");
+  return jobId
+    ? <Navigate to={`/job-posts/${encodeURIComponent(jobId)}/materials`} replace />
+    : <MaterialsPage />;
 }
 
 function NotFoundPage() {

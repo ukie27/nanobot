@@ -418,6 +418,7 @@ class ProfileInsightProposalModel(Base):
     profile_id: Mapped[str] = mapped_column(ForeignKey("candidate_profiles.id", ondelete="CASCADE"), nullable=False)
     insight_type: Mapped[str] = mapped_column(String(64), nullable=False)
     conclusion: Mapped[str] = mapped_column(Text, nullable=False)
+    recommended_action: Mapped[str | None] = mapped_column(Text)
     evidence_refs_json: Mapped[str] = mapped_column(Text, nullable=False)
     counter_evidence_json: Mapped[str] = mapped_column(Text, nullable=False)
     confidence: Mapped[float] = mapped_column(Float, nullable=False)
@@ -1093,6 +1094,38 @@ class MaterialAgentProposalModel(Base):
     __table_args__ = (
         Index("ix_material_agent_proposals_job", "job_post_id", "created_at"),
         Index("ix_material_agent_proposals_review", "status", "created_at"),
+    )
+
+
+class StandaloneResumeProposalModel(Base):
+    __tablename__ = "standalone_resume_proposals"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    profile_id: Mapped[str] = mapped_column(
+        ForeignKey("candidate_profiles.id", ondelete="CASCADE"), nullable=False
+    )
+    resume_name: Mapped[str] = mapped_column(String(300), nullable=False)
+    user_prompt: Mapped[str] = mapped_column(Text, nullable=False)
+    fact_set_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    schema_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    content_json: Mapped[str] = mapped_column(Text, nullable=False)
+    input_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    output_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(24), nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    drafter_run_id: Mapped[str] = mapped_column(
+        ForeignKey("agent_runs.id", ondelete="RESTRICT"), nullable=False
+    )
+    resume_id: Mapped[str | None] = mapped_column(
+        ForeignKey("resumes.id", ondelete="SET NULL")
+    )
+    resume_version_id: Mapped[str | None] = mapped_column(
+        ForeignKey("resume_versions.id", ondelete="SET NULL")
+    )
+    resolution_reason: Mapped[str | None] = mapped_column(String(500))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    __table_args__ = (
+        Index("ix_standalone_resume_proposals_review", "status", "created_at"),
     )
 
 

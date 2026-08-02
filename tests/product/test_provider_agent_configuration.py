@@ -159,7 +159,7 @@ def test_resume_import_uses_updated_provider_without_service_restart(
             return LLMResponse(
                 content=json.dumps(
                     {
-                        "schemaVersion": "candidate_profile_object.v2",
+                        "schemaVersion": "candidate_profile_object.v3",
                         "objects": [],
                     }
                 )

@@ -198,3 +198,11 @@ def test_cli_workspace_error_is_concise(tmp_path: Path, monkeypatch) -> None:
     assert result.exit_code == 2
     assert "Workspace could not be created" in result.output
     assert "Traceback" not in result.output
+
+
+def test_start_command_rejects_non_loopback_host() -> None:
+    result = CliRunner().invoke(
+        career_console_cli, ["start", "--host", "0.0.0.0"]
+    )
+    assert result.exit_code == 2
+    assert "only supports loopback bind addresses" in result.output

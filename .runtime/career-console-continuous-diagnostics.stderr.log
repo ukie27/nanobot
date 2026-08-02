@@ -1,0 +1,14 @@
+INFO:     Started server process [6428]
+INFO:     Waiting for application startup.
+INFO  [alembic.runtime.migration] Context impl SQLiteImpl.
+INFO  [alembic.runtime.migration] Will assume non-transactional DDL.
+INFO  [alembic.runtime.migration] Context impl SQLiteImpl.
+INFO  [alembic.runtime.migration] Will assume non-transactional DDL.
+WARNI [career_console.infrastructure.agents.profile_insight] Profile insight schema validation failed: [{'location': 'insights.3', 'type': 'value_error'}, {'location': 'insights.8', 'type': 'value_error'}]
+WARNI [career_console.infrastructure.agents.profile_insight] Profile insight schema validation failed: [{'location': 'insights.3', 'type': 'value_error'}, {'location': 'insights.8', 'type': 'value_error'}]
+INFO  [alembic.runtime.migration] Context impl SQLiteImpl.
+INFO  [alembic.runtime.migration] Will assume non-transactional DDL.
+INFO  [alembic.runtime.migration] Context impl SQLiteImpl.
+INFO  [alembic.runtime.migration] Will assume non-transactional DDL.
+INFO  [alembic.runtime.migration] Context impl SQLiteImpl.
+INFO  [alembic.runtime.migration] Will assume non-transactional DDL.

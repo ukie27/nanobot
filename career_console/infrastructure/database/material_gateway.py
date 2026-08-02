@@ -226,6 +226,177 @@ class SqlAlchemyMaterialGateway:
                 for resume, material_count in rows
             ]
 
+    def get_resume(self, resume_id: str) -> dict[str, Any]:
+        with self._session_factory() as session:
+            resume = session.get(ResumeModel, resume_id)
+            if resume is None:
+                raise EntityNotFoundError("Resume series was not found.")
+            return self._resume_detail_view(session, resume)
+
+    def edit_resume(
+        self,
+        resume_id: str,
+        *,
+        expected_version_id: str,
+        blocks: list[dict[str, str]],
+    ) -> dict[str, Any]:
+        now = datetime.now(UTC)
+        with self._session_factory() as session:
+            resume = session.get(ResumeModel, resume_id)
+            if resume is None:
+                raise EntityNotFoundError("Resume series was not found.")
+            parent = self._latest_resume_series_version(session, resume.id)
+            if parent is None or parent.id != expected_version_id:
+                raise VersionConflictError("简历版本已变化，请刷新后重试。")
+            if parent.status == VersionStatus.FINAL.value:
+                raise CareerDomainError(
+                    "已定稿简历不可继续编辑，请基于它创建新版本。",
+                    code="final_resume_immutable",
+                )
+            old_blocks = self._blocks(parent)
+            edits = {item["id"]: item["text"].strip() for item in blocks}
+            if len(edits) != len(blocks) or set(edits) != {
+                item.id for item in old_blocks
+            }:
+                raise CareerDomainError(
+                    "编辑内容必须完整包含当前版本的所有内容块。",
+                    code="material_block_set_invalid",
+                )
+            latest_number = session.scalar(
+                select(func.max(ResumeVersionModel.version_number)).where(
+                    ResumeVersionModel.resume_id == resume.id
+                )
+            ) or 0
+            version = ResumeVersionModel(
+                id=str(uuid4()),
+                resume_id=resume.id,
+                material_draft_id=None,
+                parent_version_id=parent.id,
+                source_resume_version_id=parent.source_resume_version_id,
+                version_scope=parent.version_scope,
+                version_number=latest_number + 1,
+                status=VersionStatus.DRAFT.value,
+                title=parent.title,
+                content_json="[]",
+                rendered_text="",
+                content_hash="",
+                fact_set_hash=parent.fact_set_hash,
+                created_at=now,
+                finalized_at=None,
+            )
+            session.add(version)
+            session.flush()
+            snapshot_map = self._clone_snapshots(session, parent.id, version.id, now)
+            new_blocks = [
+                MaterialBlock(
+                    item.id,
+                    item.section,
+                    edits[item.id],
+                    tuple(
+                        snapshot_map[snapshot_id].id
+                        for snapshot_id in item.fact_snapshot_ids
+                    ),
+                )
+                for item in old_blocks
+            ]
+            self._save_content(session, version, new_blocks)
+            self._perform_standalone_review(session, version, now)
+            resume.updated_at = now
+            session.commit()
+            return self._resume_detail_view(session, resume)
+
+    def review_resume(self, resume_id: str) -> dict[str, Any]:
+        now = datetime.now(UTC)
+        with self._session_factory() as session:
+            resume = session.get(ResumeModel, resume_id)
+            if resume is None:
+                raise EntityNotFoundError("Resume series was not found.")
+            version = self._latest_resume_series_version(session, resume.id)
+            if version is None:
+                raise EntityNotFoundError("Resume version was not found.")
+            if version.status == VersionStatus.FINAL.value:
+                return self._resume_detail_view(session, resume)
+            self._perform_standalone_review(session, version, now)
+            resume.updated_at = now
+            session.commit()
+            return self._resume_detail_view(session, resume)
+
+    def finalize_resume(
+        self, resume_id: str, *, expected_version_id: str
+    ) -> dict[str, Any]:
+        now = datetime.now(UTC)
+        with self._session_factory() as session:
+            resume = session.get(ResumeModel, resume_id)
+            if resume is None:
+                raise EntityNotFoundError("Resume series was not found.")
+            version = self._latest_resume_series_version(session, resume.id)
+            if version is None or version.id != expected_version_id:
+                raise VersionConflictError("简历版本已变化，请刷新后重试。")
+            if version.status == VersionStatus.FINAL.value:
+                return self._resume_detail_view(session, resume)
+            findings = self._perform_standalone_review(session, version, now)
+            if any(item.severity == "error" for item in findings):
+                raise CareerDomainError(
+                    "简历复核仍有阻断问题，暂不能定稿。",
+                    code="material_review_blocked",
+                )
+            blocks = self._blocks(version)
+            grouped: dict[str, list[str]] = defaultdict(list)
+            for block in blocks:
+                grouped[block.section].append(block.text)
+            result = self._pdf_exporter.generate(
+                title=version.title,
+                subtitle=f"可复用简历 · {resume.name}",
+                sections=[
+                    (_SECTION_LABELS.get(section, section), lines)
+                    for section, lines in grouped.items()
+                ],
+            )
+            export_id = str(uuid4())
+            pdf_name = (
+                f"resume-{resume.id}-v{version.version_number}-"
+                f"{result.sha256[:12]}.pdf"
+            )
+            preview_name = (
+                f"resume-{resume.id}-v{version.version_number}-"
+                f"{result.sha256[:12]}.png"
+            )
+            pdf_path = self._exports_dir / pdf_name
+            preview_path = self._exports_dir / preview_name
+            try:
+                self._atomic_write(pdf_path, result.pdf_bytes)
+                self._atomic_write(preview_path, result.preview_png)
+            except Exception:
+                pdf_path.unlink(missing_ok=True)
+                preview_path.unlink(missing_ok=True)
+                raise
+            session.add(
+                MaterialExportModel(
+                    id=export_id,
+                    resume_version_id=version.id,
+                    format="pdf",
+                    relative_path=pdf_name,
+                    preview_relative_path=preview_name,
+                    sha256=result.sha256,
+                    size_bytes=result.size_bytes,
+                    page_count=result.page_count,
+                    text_layer_ok=int(result.text_layer_ok),
+                    render_ok=int(result.render_ok),
+                    extracted_text_hash=result.extracted_text_hash,
+                    created_at=now,
+                )
+            )
+            version.status = VersionStatus.FINAL.value
+            version.finalized_at = now
+            resume.updated_at = now
+            try:
+                session.commit()
+            except Exception:
+                pdf_path.unlink(missing_ok=True)
+                preview_path.unlink(missing_ok=True)
+                raise
+            return self._resume_detail_view(session, resume)
+
     def list_materials(self) -> list[dict[str, Any]]:
         with self._session_factory() as session:
             drafts = session.scalars(
@@ -580,6 +751,48 @@ class SqlAlchemyMaterialGateway:
             )
         return findings
 
+    def _perform_standalone_review(
+        self, session: Session, version: ResumeVersionModel, now: datetime
+    ):
+        findings = review_material(
+            self._blocks(version),
+            self._domain_snapshots(session, version.id),
+            material_type=MaterialType.RESUME,
+        )
+        review = MaterialReviewModel(
+            id=str(uuid4()),
+            resume_version_id=version.id,
+            schema_version="material_review.v1",
+            status=(
+                "failed"
+                if any(item.severity == "error" for item in findings)
+                else "passed"
+            ),
+            error_count=sum(item.severity == "error" for item in findings),
+            warning_count=sum(item.severity == "warning" for item in findings),
+            created_at=now,
+        )
+        session.add(review)
+        session.flush()
+        for finding in findings:
+            session.add(
+                ReviewFindingModel(
+                    id=str(uuid4()),
+                    review_id=review.id,
+                    severity=finding.severity,
+                    code=finding.code,
+                    message=finding.message,
+                    block_id=finding.block_id,
+                    created_at=now,
+                )
+            )
+        version.status = (
+            VersionStatus.DRAFT.value
+            if any(item.severity == "error" for item in findings)
+            else VersionStatus.REVIEWED.value
+        )
+        return findings
+
     def _save_content(
         self, session: Session, version: ResumeVersionModel, blocks: list[MaterialBlock]
     ) -> None:
@@ -606,6 +819,35 @@ class SqlAlchemyMaterialGateway:
                     )
                 )
         session.flush()
+
+    @staticmethod
+    def _clone_snapshots(
+        session: Session,
+        source_version_id: str,
+        target_version_id: str,
+        now: datetime,
+    ) -> dict[str, FactSnapshotModel]:
+        result: dict[str, FactSnapshotModel] = {}
+        snapshots = session.scalars(
+            select(FactSnapshotModel).where(
+                FactSnapshotModel.resume_version_id == source_version_id
+            )
+        ).all()
+        for source in snapshots:
+            target = FactSnapshotModel(
+                id=str(uuid4()),
+                resume_version_id=target_version_id,
+                fact_id=source.fact_id,
+                fact_version=source.fact_version,
+                category=source.category,
+                field_key=source.field_key,
+                value=source.value,
+                created_at=now,
+            )
+            session.add(target)
+            result[source.id] = target
+        session.flush()
+        return result
 
     @staticmethod
     def _snapshot_facts(
@@ -975,6 +1217,87 @@ class SqlAlchemyMaterialGateway:
             "updated_at": self._utc(resume.updated_at),
         }
 
+    def _resume_detail_view(
+        self, session: Session, resume: ResumeModel
+    ) -> dict[str, Any]:
+        versions = session.scalars(
+            select(ResumeVersionModel)
+            .where(
+                ResumeVersionModel.resume_id == resume.id,
+                ResumeVersionModel.version_scope.in_(["base", "direction"]),
+            )
+            .order_by(
+                ResumeVersionModel.version_number.desc(),
+                ResumeVersionModel.created_at.desc(),
+            )
+        ).all()
+        if not versions:
+            fallback = self._latest_resume_series_version(session, resume.id)
+            versions = [] if fallback is None else [fallback]
+        if not versions:
+            raise EntityNotFoundError("Resume version was not found.")
+        current = versions[0]
+        snapshots = {
+            item.id: item
+            for item in session.scalars(
+                select(FactSnapshotModel).where(
+                    FactSnapshotModel.resume_version_id == current.id
+                )
+            ).all()
+        }
+        review = session.scalar(
+            select(MaterialReviewModel)
+            .where(MaterialReviewModel.resume_version_id == current.id)
+            .order_by(MaterialReviewModel.created_at.desc())
+        )
+        findings = (
+            []
+            if review is None
+            else session.scalars(
+                select(ReviewFindingModel).where(
+                    ReviewFindingModel.review_id == review.id
+                )
+            ).all()
+        )
+        export = session.scalar(
+            select(MaterialExportModel)
+            .where(MaterialExportModel.resume_version_id == current.id)
+            .order_by(MaterialExportModel.created_at.desc())
+        )
+        result = self._resume_view(session, resume, current)
+        result.update(
+            {
+                "current_version": self._version_view(
+                    current, self._blocks(current), snapshots
+                ),
+                "versions": [self._version_summary(item) for item in versions],
+                "review": (
+                    None
+                    if review is None
+                    else {
+                        "id": review.id,
+                        "status": review.status,
+                        "schema_version": review.schema_version,
+                        "error_count": review.error_count,
+                        "warning_count": review.warning_count,
+                        "created_at": self._utc(review.created_at),
+                        "findings": [
+                            {
+                                "id": item.id,
+                                "severity": item.severity,
+                                "code": item.code,
+                                "message": item.message,
+                                "block_id": item.block_id,
+                            }
+                            for item in findings
+                        ],
+                    }
+                ),
+                "export": None if export is None else self._export_view(export),
+            }
+        )
+        return result
+
     @staticmethod
     def _diff_blocks(session: Session, version: ResumeVersionModel) -> list[dict[str, Any]]:
         snapshots = {
@@ -1071,14 +1394,20 @@ class SqlAlchemyMaterialGateway:
                 ResumeVersionModel.resume_id == resume_id,
                 ResumeVersionModel.version_scope.in_(["base", "direction"]),
             )
-            .order_by(ResumeVersionModel.created_at.desc())
+            .order_by(
+                ResumeVersionModel.version_number.desc(),
+                ResumeVersionModel.created_at.desc(),
+            )
         )
         if reusable is not None:
             return reusable
         return session.scalar(
             select(ResumeVersionModel)
             .where(ResumeVersionModel.resume_id == resume_id)
-            .order_by(ResumeVersionModel.created_at.desc())
+            .order_by(
+                ResumeVersionModel.version_number.desc(),
+                ResumeVersionModel.created_at.desc(),
+            )
         )
 
     @staticmethod

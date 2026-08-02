@@ -153,9 +153,23 @@ class CareerTaskRuntime:
 
 default_task_registry = TaskDefinitionRegistry([
     TaskDefinition(
-        "profile_fact_extraction", "profile_fact_extraction", "v2",
-        "profile_document.v1", "candidate_profile_object.v2",
+        "profile_fact_extraction", "profile_fact_extraction", "v3",
+        "profile_document.v1", "candidate_profile_object.v3",
         ("document_id", "document_text"),
+        review_policy="deterministic_profile_write",
+    ),
+    TaskDefinition(
+        "profile_fact_revision", "profile_fact_revision", "v1",
+        "profile_fact_revision_context.v1", "profile_fact_revision.v1",
+        (
+            "fact_id",
+            "category",
+            "field_key",
+            "current_value",
+            "instruction",
+            "evidence_texts",
+        ),
+        review_policy="deterministic_profile_revision",
     ),
     TaskDefinition(
         "mail_intelligence", "mail_intelligence", "v2",
@@ -163,17 +177,18 @@ default_task_registry = TaskDefinitionRegistry([
         ("message", "candidate_applications", "business_timezone"),
     ),
     TaskDefinition(
-        "profile_insight", "profile_insight", "v1",
-        "profile_insight_context.v1", "profile_insight.v1",
+        "profile_insight", "profile_insight", "v3",
+        "profile_insight_context.v3", "profile_insight.v3",
         (
             "schemaVersion",
             "businessTimezone",
             "inputRevision",
             "confirmedFacts",
             "confirmedPreferences",
-            "confirmedStrategy",
+            "confirmedInterviewImprovements",
             "recentSevenDayAggregates",
         ),
+        review_policy="automatic_guidance",
     ),
     TaskDefinition(
         "job_fit", "job_fit", "v1",
@@ -239,6 +254,19 @@ default_task_registry = TaskDefinitionRegistry([
             "resumeId",
             "baseResumeVersion",
             "resumeName",
+        ),
+    ),
+    TaskDefinition(
+        "standalone_resume_drafting", "standalone_resume_drafting", "v1",
+        "standalone_resume_context.v1", "resume_draft.v2",
+        (
+            "schemaVersion",
+            "businessTimezone",
+            "inputRevision",
+            "resumeName",
+            "userPrompt",
+            "confirmedFacts",
+            "factSetHash",
         ),
     ),
     TaskDefinition(

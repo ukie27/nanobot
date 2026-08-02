@@ -69,6 +69,30 @@ class SetDefaultResumeRequest(BaseModel):
     expected_version: int | None = Field(default=None, ge=1)
 
 
+class GenerateStandaloneResumeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(min_length=1, max_length=300)
+    prompt: str = Field(min_length=1, max_length=4_000)
+
+
+class ResolveStandaloneResumeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_version: int = Field(ge=1)
+    resolution: str = Field(pattern="^(confirmed|rejected)$")
+    reason: str = Field(default="", max_length=500)
+
+
+class EditResumeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_version_id: str = Field(min_length=1, max_length=36)
+    blocks: list[EditBlockRequest] = Field(min_length=1, max_length=100)
+
+
+class FinalizeResumeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_version_id: str = Field(min_length=1, max_length=36)
+
+
 class MaterialFactSnapshotResponse(BaseModel):
     id: str
     fact_id: str
@@ -190,6 +214,36 @@ class ResumeSeriesListResponse(BaseModel):
     total: int
 
 
+class ResumeDetailResponse(ResumeSeriesResponse):
+    current_version: CurrentMaterialVersionResponse
+    versions: list[MaterialVersionResponse]
+    review: MaterialReviewResponse | None
+    export: MaterialExportResponse | None
+
+
+class StandaloneResumeProposalResponse(BaseModel):
+    id: str
+    resume_name: str
+    user_prompt: str
+    fact_set_hash: str
+    schema_version: str
+    content: dict
+    status: str
+    version: int
+    drafter_run_id: str
+    review_task_id: str | None
+    resume_id: str | None
+    resume_version_id: str | None
+    resolution_reason: str | None
+    created_at: datetime
+    resolved_at: datetime | None
+
+
+class StandaloneResumeProposalListResponse(BaseModel):
+    items: list[StandaloneResumeProposalResponse]
+    total: int
+
+
 @router.get("/agent-proposals")
 def list_agent_material_proposals(job_post_id: str, request: Request) -> dict:
     return request.app.state.material_agent_service.list_for_job(job_post_id)
@@ -236,9 +290,75 @@ def fork_resume(body: ForkResumeRequest, request: Request) -> dict:
     )
 
 
+@resume_router.get(
+    "/agent-proposals", response_model=StandaloneResumeProposalListResponse
+)
+def list_standalone_resume_proposals(request: Request) -> dict:
+    return request.app.state.standalone_resume_service.list()
+
+
+@resume_router.post(
+    "/agent-proposals",
+    status_code=status.HTTP_201_CREATED,
+    response_model=StandaloneResumeProposalResponse,
+)
+def generate_standalone_resume(
+    body: GenerateStandaloneResumeRequest, request: Request
+) -> dict:
+    return request.app.state.standalone_resume_service.generate(**body.model_dump())
+
+
+@resume_router.post(
+    "/agent-proposals/{proposal_id}/resolve",
+    response_model=StandaloneResumeProposalResponse,
+)
+def resolve_standalone_resume(
+    proposal_id: str, body: ResolveStandaloneResumeRequest, request: Request
+) -> dict:
+    return request.app.state.standalone_resume_service.resolve(
+        proposal_id, **body.model_dump()
+    )
+
+
 @resume_router.get("/versions/{from_version_id}/diff/{to_version_id}")
 def diff_resume_versions(from_version_id: str, to_version_id: str, request: Request) -> dict:
     return request.app.state.material_gateway.diff_versions(from_version_id, to_version_id)
+
+
+@resume_router.get("/{resume_id}", response_model=ResumeDetailResponse)
+def get_resume(resume_id: str, request: Request) -> dict:
+    return request.app.state.material_gateway.get_resume(resume_id)
+
+
+@resume_router.post(
+    "/{resume_id}/versions",
+    status_code=status.HTTP_201_CREATED,
+    response_model=ResumeDetailResponse,
+)
+def edit_resume(resume_id: str, body: EditResumeRequest, request: Request) -> dict:
+    return request.app.state.material_gateway.edit_resume(
+        resume_id,
+        expected_version_id=body.expected_version_id,
+        blocks=[item.model_dump() for item in body.blocks],
+    )
+
+
+@resume_router.post(
+    "/{resume_id}/reviews",
+    status_code=status.HTTP_201_CREATED,
+    response_model=ResumeDetailResponse,
+)
+def review_resume(resume_id: str, request: Request) -> dict:
+    return request.app.state.material_gateway.review_resume(resume_id)
+
+
+@resume_router.post("/{resume_id}/finalize", response_model=ResumeDetailResponse)
+def finalize_resume(
+    resume_id: str, body: FinalizeResumeRequest, request: Request
+) -> dict:
+    return request.app.state.material_gateway.finalize_resume(
+        resume_id, expected_version_id=body.expected_version_id
+    )
 
 
 @router.get("", response_model=MaterialListResponse)

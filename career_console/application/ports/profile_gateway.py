@@ -39,11 +39,14 @@ class ProfileGateway(Protocol):
         input_tokens: int | None = None,
         output_tokens: int | None = None,
         retry_count: int = 0,
+        replace_document_facts: bool = False,
     ) -> dict[str, Any]: ...
 
     def get_profile(self) -> dict[str, Any]: ...
 
     def list_documents(self) -> list[dict[str, Any]]: ...
+
+    def get_document_for_reprocessing(self, *, document_id: str) -> dict[str, Any]: ...
 
     def list_facts(self, *, status: str | None = None) -> list[dict[str, Any]]: ...
 
@@ -55,6 +58,30 @@ class ProfileGateway(Protocol):
         value: str,
         source_note: str,
     ) -> dict[str, Any]: ...
+
+    def get_fact_for_revision(self, *, fact_id: str) -> dict[str, Any]: ...
+
+    def save_agent_revision(
+        self,
+        *,
+        fact_id: str,
+        expected_version: int,
+        instruction: str,
+        revised_value: str | None,
+        rationale: str | None,
+        reviser_name: str,
+        reviser_schema_version: str,
+        run_status: str,
+        error_code: str | None = None,
+        provider: str | None = None,
+        model: str | None = None,
+        prompt_version: str | None = None,
+        skill_version: str | None = None,
+        duration_ms: int | None = None,
+        input_tokens: int | None = None,
+        output_tokens: int | None = None,
+        retry_count: int = 0,
+    ) -> dict[str, Any] | None: ...
 
     def change_fact(
         self,

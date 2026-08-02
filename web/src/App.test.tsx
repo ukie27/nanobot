@@ -137,21 +137,21 @@ describe("Career app shell", () => {
             api_base: "https://api.openai.com/v1", default_model: "gpt-main", models: ["gpt-main", "gpt-review"],
             secret_ref: "career-console:workspace:provider:main:api-key" } },
           agents: { tasks: Object.fromEntries([
-            "fact_extraction", "mail_intelligence", "profile_insight", "job_fit", "resume_direction", "resume_drafting", "material_review", "daily_job_recommendation",
+            "fact_extraction", "profile_revision", "mail_intelligence", "profile_insight", "job_fit", "resume_direction", "resume_drafting", "material_review", "daily_job_recommendation",
           ].map(name => [name, { enabled: true, provider_id: "main", model: name === "material_review" ? "gpt-review" : "gpt-main", temperature: 0.1, max_tokens: 4096, reasoning_effort: null }])) },
           connectors: { opencli: { executable: null,
             boss: { enabled: false, profile_alias: "default", search_query: "", city: "全国", result_limit: 15 },
             nowcoder: { enabled: true, search_query: "", city: "全国", result_limit: 500, schedule_enabled: true, schedule_times: ["09:00"], timezone: "Asia/Shanghai" } },
             imap: { enabled: false, email_address: "", host: "", port: 993, username: "", folder: "INBOX", initial_lookback_days: 30, poll_interval_minutes: 10, secret_ref: null } },
           channels: { qq: { enabled: false, app_id: "", allow_from: [], notification_targets: [], event_subscriptions: ["task_reminder", "system_alert"], message_format: "plain", outbound_only: true, quiet_hours: { enabled: false, start: "22:00", end: "08:00", timezone: "Asia/Shanghai" }, secret_ref: null }, send_max_retries: 3 },
-          scheduler: { enabled: true, poll_seconds: 60, reminders_enabled: true, connector_jobs_enabled: true, profile_maintenance_enabled: true, profile_maintenance_time: "21:30", channel_dispatch_enabled: true },
+          scheduler: { enabled: true, poll_seconds: 60, reminders_enabled: true, connector_jobs_enabled: false, nowcoder_sync_enabled: true, mail_sync_enabled: false, profile_maintenance_enabled: true, profile_maintenance_time: "21:30", profile_maintenance_interval_days: 3, channel_dispatch_enabled: true },
         },
       }) });
     });
     vi.stubGlobal("fetch", fetchMock);
     renderApp("/settings");
     expect(await screen.findByRole("heading", { name: "常规" })).toBeInTheDocument();
-    expect(screen.getByDisplayValue("Asia/Shanghai")).toBeInTheDocument();
+    expect(screen.getByLabelText("时区")).toHaveValue("Asia/Shanghai");
     expect(screen.getByText("敏感日志脱敏：强制开启")).toBeInTheDocument();
     expect(screen.getByRole("combobox", { name: "设置分类" })).toHaveValue("general");
 
@@ -286,26 +286,206 @@ describe("Career app shell", () => {
       }) });
     }));
     renderApp("/profile");
-    expect(await screen.findByRole("heading", { name: "张三" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "个人档案" })).toBeInTheDocument();
+    expect(screen.getByText("张三")).toBeInTheDocument();
     expect(screen.getByText("Python")).toBeInTheDocument();
-    expect(screen.getByText("可用于正式业务")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /职业档案/ })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("button", { name: "个人档案" })).toHaveAttribute("aria-current", "page");
     expect(screen.getByRole("button", { name: /求职偏好/ })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /洞察与策略/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /洞察建议/ })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /档案维护/ })).not.toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /导入简历或经历资料/ })).toHaveAttribute("href", "/profile/import");
-    expect(screen.getByRole("link", { name: /处理 Agent 提取结果/ })).toHaveAttribute("href", "/profile/reviews");
-    expect(screen.getByRole("link", { name: /手动添加一段经历/ })).toHaveAttribute("href", "/profile/manual");
+    expect(screen.getByRole("link", { name: "导入资料" })).toHaveAttribute("href", "/profile/import");
+    expect(screen.getByRole("link", { name: "手动添加" })).toHaveAttribute("href", "/profile/manual");
+    expect(screen.getByRole("link", { name: "招聘邮件" })).toHaveAttribute("href", "/message-center");
+    expect(screen.getByRole("link", { name: "待我处理" })).toHaveAttribute("href", "/reviews");
+    expect(screen.queryByText("消息与确认")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /求职偏好/ }));
+    expect(screen.queryByRole("region", { name: "个人档案操作" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "个人档案" }));
+    expect(screen.getByRole("region", { name: "个人档案操作" })).toBeInTheDocument();
     expect(screen.queryByText("skill · v2")).not.toBeInTheDocument();
-    const factRecord = screen.getByText(/查看来源与记录/).closest("details");
+    const factRecord = screen.getByText("查看来源").closest("details");
     expect(factRecord).not.toHaveAttribute("open");
     expect(screen.getByText("技能：Python")).not.toBeVisible();
-    fireEvent.click(screen.getByText(/查看来源与记录/));
+    fireEvent.click(screen.getByText("查看来源"));
     expect(factRecord).toHaveAttribute("open");
-    expect(screen.getByText("记录字段：skill · 版本 2")).toBeInTheDocument();
     expect(screen.getByText("技能：Python")).toBeInTheDocument();
     expect(factRecord).toHaveClass("profile-fact-evidence");
     expect(factRecord?.parentElement).toHaveClass("profile-fact-row");
+  });
+
+  it("shows automatically maintained career insights without manual generation controls", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockImplementation((input: string) => {
+      if (input === "/api/v1/profile") {
+        return Promise.resolve({ ok: true, json: async () => ({
+          id: "profile", display_name: "张三", timezone: "Asia/Shanghai", version: 2,
+          fact_counts: { proposed: 0, confirmed: 4, rejected: 0 },
+          created_at: "2026-07-23T00:00:00Z", updated_at: "2026-08-01T00:00:00Z",
+        }) });
+      }
+      if (input === "/api/v1/profile-memory") {
+        return Promise.resolve({ ok: true, json: async () => ({
+          preferences: [],
+          insights: [{
+            id: "insight-gap", category: "interview",
+            analysis: "技术面试回答缺少清晰的背景、行动和结果结构。",
+            recommendation: "本周完成两次 STAR 结构模拟回答并记录复盘。",
+            evidence_refs: ["improvement-1"], evidence_fact_ids: [],
+            evidence_improvement_ids: ["improvement-1"], counter_evidence: [],
+            confidence: 0.91, source: "career_console_profile_insight",
+            status: "active", version: 1, agent_run_id: "run-1",
+            review_task_id: null, resolution_reason: null,
+            created_at: "2026-08-01T01:00:00Z", resolved_at: null,
+          }],
+          strategies: [{
+            id: "strategy-1", version_number: 3, schema_version: "strategy_snapshot.v1",
+            period_start: "2026-07-27", period_end: "2026-08-02",
+            content: {
+              target_directions: ["后端工程"], priority_locations: ["上海"],
+              constraints: [], application_count: 2, confirmed_fact_count: 4,
+              actions: ["处理待确认事实与洞察", "完成两次面试模拟", "复盘最近一份岗位要求"],
+              evaluation_period_days: 7,
+            },
+            evidence_refs: [], status: "active", version: 2,
+            review_task_id: null, resolution_reason: null,
+            created_at: "2026-07-27T01:00:00Z", resolved_at: null,
+          }],
+          digests: [{
+            id: "digest-1", digest_date: "2026-08-01", schema_version: "daily_digest.v1",
+            content: {
+              changes: [{}], application_changes: [{}, {}],
+              pending_review_count: 1, risks: [], tomorrow_actions: [],
+            },
+            input_hash: "digest-hash", generated_at: "2026-08-01T01:00:00Z",
+          }],
+          changes: [], impact_runs: [],
+        }) });
+      }
+      if (input === "/api/v1/configuration") {
+        return Promise.resolve({ ok: true, json: async () => ({
+          schema_version: "career-console.configuration.v1",
+          revision: 2, active_revision: 2, activation_status: "active",
+          configuration: {
+            scheduler: {
+              enabled: true, poll_seconds: 60, reminders_enabled: true,
+              connector_jobs_enabled: false, nowcoder_sync_enabled: true,
+              mail_sync_enabled: true, profile_maintenance_enabled: true,
+              profile_maintenance_time: "21:30",
+              profile_maintenance_interval_days: 3,
+              channel_dispatch_enabled: true,
+            },
+          },
+        }) });
+      }
+      if (input === "/api/v1/scheduler/runs") {
+        return Promise.resolve({ ok: true, json: async () => ({
+          total: 1,
+          items: [{
+            id: "scheduler-run-1", trigger_type: "interval", status: "completed",
+            counters: {
+              profile_jobs_processed: 1, profile_insights_created: 1,
+              profile_insights_reused: 0, profile_insight_skipped: 0,
+              profile_insight_failed: 0,
+            },
+            error_codes: [], started_at: "2026-08-01T01:00:00Z",
+            finished_at: "2026-08-01T01:00:02Z",
+          }],
+        }) });
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({ total: 0, items: [] }),
+      });
+    }));
+
+    renderApp("/profile");
+    fireEvent.click(await screen.findByRole("button", { name: /洞察建议/ }));
+
+    expect(await screen.findByRole("heading", {
+      name: "当前建议",
+    })).toBeInTheDocument();
+    expect(screen.getByText("自动分析")).toBeInTheDocument();
+    expect(screen.getByText("已开启")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "每 3 天" })).toHaveAttribute(
+      "href",
+      "/settings?section=automation",
+    );
+    expect(screen.getByText("技术面试回答缺少清晰的背景、行动和结果结构。")).toBeInTheDocument();
+    expect(screen.getByText("本周完成两次 STAR 结构模拟回答并记录复盘。")).toBeInTheDocument();
+    expect(screen.queryByText("分析依据")).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "查看智能功能记录" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "立即检查更新" })).not.toBeInTheDocument();
+    expect(screen.queryByText("待确认事项")).not.toBeInTheDocument();
+    expect(screen.queryByText("处理待确认事实与洞察")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "生成洞察建议" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "生成本周策略" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "重建今日摘要" })).not.toBeInTheDocument();
+  });
+
+  it("filters current insights by business category", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockImplementation((input: string) => {
+      if (input === "/api/v1/profile") {
+        return Promise.resolve({ ok: true, json: async () => ({
+          id: "profile", display_name: "张三", timezone: "Asia/Shanghai", version: 2,
+          fact_counts: { proposed: 0, confirmed: 4, rejected: 0 },
+          created_at: "2026-07-23T00:00:00Z", updated_at: "2026-08-01T00:00:00Z",
+        }) });
+      }
+      if (input === "/api/v1/profile-memory") {
+        return Promise.resolve({ ok: true, json: async () => ({
+          preferences: [],
+          insights: [{
+            id: "resume-gap", category: "resume",
+            analysis: "项目成果缺少可验证的量化结果。",
+            recommendation: "补充可以由原始材料证明的结果数据。",
+            evidence_refs: ["fact-1"], evidence_fact_ids: ["fact-1"],
+            evidence_improvement_ids: [], counter_evidence: [],
+            confidence: 0.82, source: "career_console_profile_insight",
+            status: "active", version: 1, agent_run_id: "run-resume",
+            review_task_id: null, resolution_reason: null,
+            created_at: "2026-08-01T01:00:00Z", resolved_at: null,
+          }, {
+            id: "learning-gap", category: "learning",
+            analysis: "近期面试暴露出系统设计知识不够稳定。",
+            recommendation: "围绕最近未答好的主题完成一次专项复盘。",
+            evidence_refs: ["improvement-1"], evidence_fact_ids: [],
+            evidence_improvement_ids: ["improvement-1"], counter_evidence: [],
+            confidence: 0.78, source: "career_console_profile_insight",
+            status: "active", version: 1, agent_run_id: "run-learning",
+            review_task_id: null, resolution_reason: null,
+            created_at: "2026-08-01T01:00:00Z", resolved_at: null,
+          }],
+          strategies: [], digests: [], changes: [], impact_runs: [],
+        }) });
+      }
+      if (input === "/api/v1/configuration") {
+        return Promise.resolve({ ok: true, json: async () => ({
+          configuration: {
+            scheduler: {
+              enabled: true,
+              profile_maintenance_enabled: true,
+              profile_maintenance_time: "21:30",
+              profile_maintenance_interval_days: 3,
+            },
+          },
+        }) });
+      }
+      if (input === "/api/v1/scheduler/runs") {
+        return Promise.resolve({ ok: true, json: async () => ({ items: [], total: 0 }) });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ total: 0, items: [] }) });
+    }));
+
+    renderApp("/profile");
+    fireEvent.click(await screen.findByRole("button", { name: /洞察建议/ }));
+
+    expect(await screen.findByText("项目成果缺少可验证的量化结果。")).toBeInTheDocument();
+    expect(screen.getByText("近期面试暴露出系统设计知识不够稳定。")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /^简历/ }));
+    expect(screen.getByText("项目成果缺少可验证的量化结果。")).toBeInTheDocument();
+    expect(screen.queryByText("近期面试暴露出系统设计知识不够稳定。")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /^学习/ }));
+    expect(screen.queryByText("项目成果缺少可验证的量化结果。")).not.toBeInTheDocument();
+    expect(screen.getByText("近期面试暴露出系统设计知识不够稳定。")).toBeInTheDocument();
   });
 
   it("switches the preference editor to the selected preference content", async () => {
@@ -359,24 +539,49 @@ describe("Career app shell", () => {
   });
 
   it("keeps document processing metadata behind a user-facing disclosure", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({
-        total: 2,
-        items: [{
-          id: "document-1", file_name: "项目经历.txt", parser_name: "pasted_text_v1",
-          size_bytes: 1024, fact_source_count: 3, sha256: "a".repeat(64), parse_status: "parsed",
-          created_at: "2026-07-27T00:00:00Z",
-        }, {
-          id: "document-2", file_name: "失败简历.pdf", parser_name: "pypdf_v1",
-          size_bytes: 512, fact_source_count: 0, sha256: "b".repeat(64), parse_status: "extraction_failed",
-          created_at: "2026-07-27T00:01:00Z",
-        }],
-      }),
-    }));
+    const fetchMock = vi.fn().mockImplementation((input: string, init?: RequestInit) => {
+      if (input === "/api/v1/onboarding") {
+        return Promise.resolve({ ok: true, json: async () => ({ completed: true }) });
+      }
+      if (input === "/api/v1/system/session") {
+        return Promise.resolve({ ok: true, json: async () => ({ csrf_token: "test-token" }) });
+      }
+      if (input === "/api/v1/documents") {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            total: 2,
+            items: [{
+              id: "document-1", file_name: "项目经历.txt", parser_name: "pasted_text_v1",
+              size_bytes: 1024, fact_source_count: 3, sha256: "a".repeat(64), parse_status: "parsed",
+              created_at: "2026-07-27T00:00:00Z",
+            }, {
+              id: "document-2", file_name: "失败简历.pdf", parser_name: "pypdf_v1",
+              size_bytes: 512, fact_source_count: 0, sha256: "b".repeat(64), parse_status: "extraction_failed",
+              created_at: "2026-07-27T00:01:00Z",
+            }],
+          }),
+        });
+      }
+      if (input === "/api/v1/documents/document-1/reprocess" && init?.method === "POST") {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            id: "document-1", file_name: "项目经历.txt", parser_name: "pasted_text_v1",
+            media_type: "text/plain", size_bytes: 1024, fact_source_count: 2,
+            sha256: "a".repeat(64), parse_status: "parsed", text_preview: "项目经历",
+            duplicate: false, proposed_fact_count: 0, maintained_fact_count: 2,
+            extracted_candidate_count: 2, superseded_fact_count: 1,
+            created_at: "2026-07-27T00:00:00Z",
+          }),
+        });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ total: 0, items: [] }) });
+    });
+    vi.stubGlobal("fetch", fetchMock);
     renderApp("/documents");
     expect(await screen.findByRole("heading", { name: "导入资料" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "返回我的资料" })).toHaveAttribute("href", "/profile");
+    expect(screen.getByRole("link", { name: "返回个人资料" })).toHaveAttribute("href", "/profile");
     expect(screen.queryByRole("navigation", { name: "主导航" })).not.toBeInTheDocument();
     expect(screen.getByLabelText("选择文件并导入")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "导入记录" })).toBeInTheDocument();
@@ -389,9 +594,15 @@ describe("Career app shell", () => {
     fireEvent.click(screen.getAllByText("查看导入记录")[0]);
     expect(importRecord).toHaveAttribute("open");
     expect(screen.getByText("处理方式：粘贴文本")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "重新整理档案" }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/documents/document-1/reprocess",
+      expect.objectContaining({ method: "POST" }),
+    ));
+    expect(await screen.findByText("已重新整理 2 条档案，替换 1 条旧内容。")).toBeInTheDocument();
   });
 
-  it("shows Agent processing and opens review results after resume import", async () => {
+  it("shows Agent processing and reports directly maintained facts after resume import", async () => {
     let finishImport: ((value: unknown) => void) | undefined;
     const fetchMock = vi.fn().mockImplementation((input: string, init?: RequestInit) => {
       if (input === "/api/v1/system/session") {
@@ -432,14 +643,17 @@ describe("Career app shell", () => {
         text_preview: "技能：Python",
         fact_source_count: 2,
         duplicate: false,
-        proposed_fact_count: 2,
+        proposed_fact_count: 0,
+        maintained_fact_count: 2,
         extracted_candidate_count: 2,
         created_at: "2026-07-29T00:00:00Z",
       }),
     });
 
-    expect(await screen.findByRole("heading", { name: "确认档案内容" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "返回我的资料" })).toHaveAttribute("href", "/profile");
+    expect(await screen.findByText("已更新 2 条个人档案。")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "导入资料" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "返回个人档案" })).toHaveAttribute("href", "/profile");
+    expect(screen.queryByRole("heading", { name: "确认档案内容" })).not.toBeInTheDocument();
     expect(screen.queryByRole("navigation", { name: "主导航" })).not.toBeInTheDocument();
   });
 
@@ -576,23 +790,23 @@ describe("Career app shell", () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({ total: 1, items: [{
-        id: "review-1", task_type: "candidate_fact_review", entity_type: "candidate_fact",
-        entity_id: "fact-1", title: "确认职业事实：Python", summary: "技能：Python",
-        source_type: "agent_extraction", priority: 20, status: "open", version: 1,
-        agent_run_id: "agent-run-1234", target_url: "/review",
+        id: "review-1", task_type: "mail_intelligence_review", entity_type: "mail_intelligence_item",
+        entity_id: "mail-item-1", title: "确认招聘邮件中的申请进度", summary: "邮件中的岗位关联存在歧义。",
+        source_type: "mail_analysis", priority: 20, status: "open", version: 1,
+        agent_run_id: "agent-run-1234", target_url: "/message-center",
         entity_subtype: null, can_resolve_inline: false,
         created_at: "2026-07-26T01:00:00Z", updated_at: "2026-07-26T01:00:00Z",
         resolved_at: null, resolution: null, resolution_reason: null, resolved_by: null,
       }] }),
     }));
     renderApp("/reviews");
-    expect(await screen.findByRole("heading", { name: "审查中心" })).toBeInTheDocument();
-    expect(await screen.findByRole("heading", { name: "确认职业事实：Python" })).toBeInTheDocument();
-    expect(screen.getByText("智能分析只会生成待确认建议")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "查看并处理" })).toHaveAttribute("href", "/review");
+    expect(await screen.findByRole("heading", { name: "待我处理" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "确认招聘邮件中的申请进度" })).toBeInTheDocument();
+    expect(screen.getByText("这里只显示需要你决定的变化")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "查看并处理" })).toHaveAttribute("href", "/message-center");
   });
 
-  it("reviews profile bundles inline with Agent result and source evidence", async () => {
+  it("filters legacy profile bundles from the current review queue", async () => {
     const bundle = {
       id: "bundle-1", task_type: "profile_section_review", entity_type: "review_bundle",
       entity_id: "bundle-1", title: "示例简历.pdf · 项目经历",
@@ -635,22 +849,10 @@ describe("Career app shell", () => {
     vi.stubGlobal("fetch", fetchMock);
     renderApp("/reviews");
 
-    expect(await screen.findByRole("heading", { name: "示例简历.pdf · 项目经历" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "确认整组（1）" })).toBeInTheDocument();
-    expect(screen.queryByText("Agent 整理结果")).not.toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "展开核对" }));
-
-    expect(await screen.findByText("这些内容已经过 Agent 提取和归组")).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "求职工作台" })).toBeInTheDocument();
-    expect(screen.getByText("Agent 整理结果")).toBeInTheDocument();
-    expect(screen.getByText("模型置信度 92%")).toBeInTheDocument();
-    expect(screen.getByText("对照原文证据（1 处）")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "确认这一项" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "修改" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "拒绝" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "确认整组（1）" })).toBeInTheDocument();
-    expect(screen.queryByRole("link", { name: "查看整组并处理" })).not.toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "待我处理" })).toBeInTheDocument();
+    expect(screen.getByText("0 项")).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "示例简历.pdf · 项目经历" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "确认整组（1）" })).not.toBeInTheDocument();
   });
 
   it("provides a return path from a profile bundle detail page", async () => {
@@ -672,7 +874,7 @@ describe("Career app shell", () => {
     renderApp("/reviews/bundle-1");
 
     expect(await screen.findByRole("heading", { name: "示例简历.pdf · 技能与能力" })).toBeInTheDocument();
-    expect(screen.getAllByRole("link", { name: "返回审查中心" })).not.toHaveLength(0);
+    expect(screen.getAllByRole("link", { name: "返回待我处理" })).not.toHaveLength(0);
   });
 
   it("renders safe AgentRun audit metadata without business content", async () => {
@@ -692,6 +894,7 @@ describe("Career app shell", () => {
     }));
     renderApp("/agent-runs");
     expect(await screen.findByRole("heading", { name: "智能功能记录" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "智能功能记录" })).toHaveAttribute("href", "/agent-runs");
     expect(await screen.findByRole("heading", { name: "职业事实提取" })).toBeInTheDocument();
     expect(screen.getByText("LocalProvider · local-model")).toBeInTheDocument();
     expect(screen.getByText("这里记录智能功能的执行结果")).toBeInTheDocument();
@@ -780,7 +983,7 @@ describe("Career app shell", () => {
     renderApp("/applications/application-ready");
 
     expect(await screen.findByText("没有可绑定的定稿版本")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "准备申请材料" })).toHaveAttribute("href", "/materials?jobId=job-ready");
+    expect(screen.getByRole("link", { name: "准备申请材料" })).toHaveAttribute("href", "/job-posts/job-ready/materials");
     expect(screen.queryByRole("button", { name: "确认投递并锁定此版本" })).not.toBeInTheDocument();
     expect(fetchMock.mock.calls.some(([input]) => String(input).includes("/submit"))).toBe(false);
   });
@@ -1129,21 +1332,146 @@ describe("Career app shell", () => {
     expect(screen.queryByRole("button", { name: "开始跟踪" })).not.toBeInTheDocument();
   });
 
-  it("explains why material generation is unavailable", async () => {
+  it("keeps reusable resume maintenance separate from job customization", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockImplementation((input: string) => Promise.resolve({
+      ok: true,
+      json: async () => input === "/api/v1/resumes/default"
+        ? null
+        : { total: 0, items: [] },
+    })));
+    renderApp("/materials");
+    expect(await screen.findByRole("heading", { name: "我的简历" })).toBeInTheDocument();
+    expect(screen.getByLabelText("简历名称")).toBeInTheDocument();
+    expect(screen.getByLabelText("生成要求")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "生成简历候选" })).toBeEnabled();
+    expect(screen.getByRole("link", { name: "前往目标岗位定制" })).toHaveAttribute("href", "/job-posts");
+    expect(screen.queryByText("请先选择岗位。")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("选择岗位")).not.toBeInTheDocument();
+  });
+
+  it("sends the standalone resume name and prompt to the Agent proposal endpoint", async () => {
+    const proposal = {
+      id: "proposal-1", resume_name: "后端开发通用简历", user_prompt: "突出 Python 后端能力",
+      fact_set_hash: "a".repeat(64), schema_version: "resume_draft.v2",
+      content: { schemaVersion: "resume_draft.v2", title: "后端开发通用简历",
+        rationale: "按用户要求整理", blocks: [{ blockId: "summary", section: "核心能力",
+          text: "具备 Python 后端项目经验。", factIds: ["fact-1"], requirementIds: [] }] },
+      status: "proposed", version: 1, drafter_run_id: "run-1", review_task_id: "review-1",
+      resume_id: null, resume_version_id: null, resolution_reason: null,
+      created_at: "2026-07-31T00:00:00Z", resolved_at: null,
+    };
+    const fetchMock = vi.fn().mockImplementation((input: string, init?: RequestInit) => Promise.resolve({
+      ok: true,
+      json: async () => input === "/api/v1/resumes/default"
+        ? null
+        : input === "/api/v1/resumes/agent-proposals" && init?.method === "POST"
+          ? proposal
+          : input === "/api/v1/resumes/agent-proposals"
+            ? { total: 0, items: [] }
+            : { total: 0, items: [] },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    renderApp("/materials");
+
+    fireEvent.change(await screen.findByLabelText("简历名称"), { target: { value: "后端开发通用简历" } });
+    fireEvent.change(screen.getByLabelText("生成要求"), { target: { value: "突出 Python 后端能力" } });
+    fireEvent.click(screen.getByRole("button", { name: "生成简历候选" }));
+
+    await waitFor(() => {
+      const request = fetchMock.mock.calls.find(
+        ([input, init]) => input === "/api/v1/resumes/agent-proposals" && init?.method === "POST",
+      );
+      expect(JSON.parse(String(request?.[1]?.body))).toEqual({
+        name: "后端开发通用简历",
+        prompt: "突出 Python 后端能力",
+      });
+    });
+    expect(await screen.findByRole("status")).toHaveTextContent("确认前不会创建正式简历");
+  });
+
+  it("confirms a standalone resume candidate before creating the formal resume", async () => {
+    const proposal = {
+      id: "proposal-1", resume_name: "后端开发通用简历", user_prompt: "突出 Python 后端能力",
+      fact_set_hash: "a".repeat(64), schema_version: "resume_draft.v2",
+      content: { schemaVersion: "resume_draft.v2", title: "后端开发通用简历",
+        rationale: "按用户要求整理", blocks: [{ blockId: "summary", section: "核心能力",
+          text: "具备 Python 后端项目经验。", factIds: ["fact-1"], requirementIds: [] }] },
+      status: "proposed", version: 1, drafter_run_id: "run-1", review_task_id: "review-1",
+      resume_id: null, resume_version_id: null, resolution_reason: null,
+      created_at: "2026-07-31T00:00:00Z", resolved_at: null,
+    };
+    const fetchMock = vi.fn().mockImplementation((input: string, init?: RequestInit) => Promise.resolve({
+      ok: true,
+      json: async () => input === "/api/v1/resumes/default"
+        ? null
+        : input === "/api/v1/resumes/agent-proposals/proposal-1/resolve"
+          ? { ...proposal, status: "confirmed", version: 2, resume_id: "resume-1",
+            resume_version_id: "resume-version-1", resolved_at: "2026-07-31T00:05:00Z" }
+          : input === "/api/v1/resumes/agent-proposals"
+            ? { total: 1, items: [proposal] }
+            : { total: 0, items: [] },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    renderApp("/materials");
+
+    fireEvent.click(await screen.findByRole("button", { name: "确认并创建简历" }));
+    await waitFor(() => {
+      const request = fetchMock.mock.calls.find(
+        ([input, init]) => input === "/api/v1/resumes/agent-proposals/proposal-1/resolve"
+          && init?.method === "POST",
+      );
+      expect(JSON.parse(String(request?.[1]?.body))).toMatchObject({
+        expected_version: 1,
+        resolution: "confirmed",
+      });
+    });
+  });
+
+  it("redirects legacy job material links into the fixed job context", async () => {
     vi.stubGlobal("fetch", vi.fn().mockImplementation((input: string) => Promise.resolve({
       ok: true,
       json: async () => input === "/api/v1/job-posts"
-        ? { total: 1, items: [{ id: "job", company: "示例", title: "待分析岗位", requirement_count: 0, latest_analysis: null }] }
-        : input === "/api/v1/materials"
-          ? { total: 0, items: [] }
-          : input === "/api/v1/resumes"
-            ? { total: 0, items: [] }
-            : { total: 0, items: [], proposals: [], selections: [] },
+        ? { total: 1, items: [{ id: "job-1", company: "示例科技", title: "后端工程师",
+          requirement_count: 0, latest_analysis: null }] }
+        : { total: 0, items: [], proposals: [], selections: [] },
     })));
-    renderApp("/materials");
-    expect(await screen.findByRole("heading", { name: "生成草稿" })).toBeInTheDocument();
-    expect(screen.getByText("请先选择岗位。")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "生成草稿" })).toBeDisabled();
+    renderApp("/materials?jobId=job-1");
+    expect(await screen.findByRole("heading", { name: "示例科技 · 后端工程师" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "返回岗位详情" })).toHaveAttribute("href", "/job-posts/job-1");
+  });
+
+  it("shows contextual back navigation for resume and job material child pages", async () => {
+    const resume = {
+      id: "resume-1", name: "通用后端简历", series_type: "base", parent_resume_id: null,
+      direction_label: null, material_count: 1, latest_version: null,
+      latest_finalized_version: null, is_default: false, default_version: null,
+      created_at: "2026-07-31T00:00:00Z", updated_at: "2026-07-31T00:00:00Z",
+      current_version: { id: "version-1", parent_version_id: null, source_resume_version_id: null,
+        version_scope: "base", version_number: 1, status: "draft", title: "通用后端简历",
+        content_hash: "a".repeat(64), fact_set_hash: "b".repeat(64),
+        created_at: "2026-07-31T00:00:00Z", finalized_at: null, rendered_text: "",
+        blocks: [] },
+      versions: [], review: null, export: null,
+    };
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => resume }));
+    renderApp("/resumes/resume-1");
+    expect(await screen.findByRole("link", { name: "返回简历库" })).toHaveAttribute("href", "/materials");
+  });
+
+  it("keeps profile maintenance actions visually neutral", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockImplementation((input: string) => Promise.resolve({
+      ok: true,
+      json: async () => input === "/api/v1/profile"
+        ? { display_name: "张三", version: 1, timezone: "Asia/Shanghai",
+          fact_counts: { confirmed: 1, proposed: 2, rejected: 0 } }
+        : { total: 1, items: [{ id: "fact-1", category: "skill", field_key: "skills",
+          value: "Python", confidence: 0.9, status: "confirmed", version: 1,
+          sources: [], revisions: [] }] },
+    })));
+    renderApp("/profile");
+    for (const name of ["导入资料", "手动添加"]) {
+      expect(await screen.findByRole("link", { name })).toHaveClass("secondary");
+    }
   });
 
   it("prioritizes confirming a ready-to-apply application on the dashboard", async () => {
@@ -1298,7 +1626,7 @@ describe("Career app shell", () => {
         privacy: { diagnostics_metadata_enabled: true, redact_sensitive_logs: true, local_only_network_binding: true },
         providers: {}, agents: { tasks: {} }, connectors: {},
         channels: { qq: { enabled: false, app_id: "", notification_targets: [], event_subscriptions: [], message_format: "plain", outbound_only: true, quiet_hours: { enabled: false, start: "22:00", end: "08:00", timezone: "Asia/Shanghai" } }, send_max_retries: 3 },
-        scheduler: { enabled: true, poll_seconds: 60, reminders_enabled: true, connector_jobs_enabled: true, profile_maintenance_enabled: true, profile_maintenance_time: "21:30", channel_dispatch_enabled: true },
+        scheduler: { enabled: true, poll_seconds: 60, reminders_enabled: true, connector_jobs_enabled: false, nowcoder_sync_enabled: true, mail_sync_enabled: true, profile_maintenance_enabled: true, profile_maintenance_time: "21:30", profile_maintenance_interval_days: 3, channel_dispatch_enabled: true },
       },
     };
     const fetchMock = vi.fn().mockImplementation((input: string) => Promise.resolve({
@@ -1319,8 +1647,12 @@ describe("Career app shell", () => {
     const scheduler = renderApp("/settings?section=scheduler");
     expect(await screen.findByRole("combobox", { name: "设置分类" })).toHaveValue("automation");
     expect(await screen.findByText("定时检查 · 已完成")).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "洞察建议" })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "牛客招聘同步" })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "招聘邮箱扫描" })).toBeChecked();
+    expect(screen.getByLabelText("更新周期")).toHaveValue("3");
     expect(screen.getByText("1 条")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "立即运行一次" }));
+    fireEvent.click(screen.getByRole("button", { name: "立即检查已启用任务" }));
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(
         "/api/v1/scheduler/run-due",
