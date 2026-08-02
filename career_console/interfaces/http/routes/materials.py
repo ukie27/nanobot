@@ -4,11 +4,12 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from fastapi import APIRouter, Request, status
+from fastapi import APIRouter, File, Form, Request, UploadFile, status
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from career_console.domain.materials import MaterialType
+from career_console.infrastructure.files import DocumentParser
 
 router = APIRouter(prefix="/api/v1/materials", tags=["materials"])
 resume_router = APIRouter(prefix="/api/v1/resumes", tags=["materials"])
@@ -45,6 +46,15 @@ class GenerateAgentMaterialRequest(BaseModel):
     job_post_id: str = Field(min_length=1, max_length=36)
     resume_id: str | None = Field(default=None, max_length=36)
     resume_name: str = Field(default="我的基础简历", min_length=1, max_length=300)
+
+
+class GenerateApplicationResumeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    application_id: str = Field(min_length=1, max_length=36)
+    job_post_id: str = Field(min_length=1, max_length=36)
+    source_resume_version_id: str | None = Field(default=None, max_length=36)
+    resume_name: str = Field(min_length=1, max_length=300)
+    prompt: str = Field(min_length=1, max_length=4_000)
 
 
 class ResolveAgentMaterialRequest(BaseModel):
@@ -187,6 +197,7 @@ class MaterialResponse(MaterialSummaryResponse):
     versions: list[MaterialVersionResponse]
     review: MaterialReviewResponse | None
     export: MaterialExportResponse | None
+    exports: list[MaterialExportResponse] = Field(default_factory=list)
 
 
 class MaterialListResponse(BaseModel):
@@ -200,11 +211,18 @@ class ResumeSeriesResponse(BaseModel):
     series_type: str
     parent_resume_id: str | None
     direction_label: str | None
+    scope: str = "library"
+    application_id: str | None = None
+    application_status: str | None = None
+    job_title: str | None = None
+    company: str | None = None
+    source_file_name: str | None = None
     material_count: int
     latest_version: MaterialVersionResponse | None
     latest_finalized_version: MaterialVersionResponse | None = None
     is_default: bool = False
     default_version: int | None = None
+    docx_export: MaterialExportResponse | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -219,6 +237,7 @@ class ResumeDetailResponse(ResumeSeriesResponse):
     versions: list[MaterialVersionResponse]
     review: MaterialReviewResponse | None
     export: MaterialExportResponse | None
+    exports: list[MaterialExportResponse] = Field(default_factory=list)
 
 
 class StandaloneResumeProposalResponse(BaseModel):
@@ -256,6 +275,23 @@ def generate_agent_material(body: GenerateAgentMaterialRequest, request: Request
     )
 
 
+@router.post(
+    "/generate",
+    status_code=status.HTTP_201_CREATED,
+    response_model=MaterialResponse,
+)
+def generate_application_material(
+    body: GenerateApplicationResumeRequest, request: Request
+) -> dict:
+    return request.app.state.material_agent_service.generate_for_application(
+        body.application_id,
+        job_id=body.job_post_id,
+        source_resume_version_id=body.source_resume_version_id,
+        resume_name=body.resume_name,
+        prompt=body.prompt,
+    )
+
+
 @router.post("/agent-proposals/{proposal_id}/resolve")
 def resolve_agent_material(proposal_id: str, body: ResolveAgentMaterialRequest,
                            request: Request) -> dict:
@@ -268,6 +304,12 @@ def resolve_agent_material(proposal_id: str, body: ResolveAgentMaterialRequest,
 @resume_router.get("", response_model=ResumeSeriesListResponse)
 def list_resumes(request: Request) -> dict:
     items = request.app.state.material_gateway.list_resumes()
+    return {"items": items, "total": len(items)}
+
+
+@resume_router.get("/application", response_model=ResumeSeriesListResponse)
+def list_application_resumes(request: Request) -> dict:
+    items = request.app.state.material_gateway.list_application_resumes()
     return {"items": items, "total": len(items)}
 
 
@@ -300,12 +342,66 @@ def list_standalone_resume_proposals(request: Request) -> dict:
 @resume_router.post(
     "/agent-proposals",
     status_code=status.HTTP_201_CREATED,
-    response_model=StandaloneResumeProposalResponse,
+    response_model=ResumeDetailResponse,
 )
 def generate_standalone_resume(
     body: GenerateStandaloneResumeRequest, request: Request
 ) -> dict:
     return request.app.state.standalone_resume_service.generate(**body.model_dump())
+
+
+@resume_router.post(
+    "/generate",
+    status_code=status.HTTP_201_CREATED,
+    response_model=ResumeDetailResponse,
+)
+def generate_resume(body: GenerateStandaloneResumeRequest, request: Request) -> dict:
+    return request.app.state.standalone_resume_service.generate(**body.model_dump())
+
+
+@resume_router.post(
+    "/import",
+    status_code=status.HTTP_201_CREATED,
+    response_model=ResumeDetailResponse,
+)
+async def import_resume(
+    request: Request,
+    file: UploadFile = File(...),
+    name: str = Form(..., min_length=1, max_length=300),
+) -> dict:
+    content = await file.read()
+    parser = DocumentParser(max_bytes=request.app.state.settings.max_document_bytes)
+    parsed = parser.parse(
+        file_name=file.filename or "resume.txt",
+        content=content,
+        media_type=file.content_type,
+    )
+    return request.app.state.material_gateway.import_resume(
+        name=name, file_name=parsed.file_name, text=parsed.text
+    )
+
+
+@resume_router.delete("/{resume_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_resume(resume_id: str, request: Request) -> None:
+    request.app.state.material_gateway.retire_resume(resume_id)
+
+
+class SaveApplicationResumeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(min_length=1, max_length=300)
+
+
+@resume_router.post(
+    "/{resume_id}/save-to-library",
+    status_code=status.HTTP_201_CREATED,
+    response_model=ResumeDetailResponse,
+)
+def save_application_resume(
+    resume_id: str, body: SaveApplicationResumeRequest, request: Request
+) -> dict:
+    return request.app.state.material_gateway.save_application_resume_to_library(
+        resume_id, name=body.name
+    )
 
 
 @resume_router.post(

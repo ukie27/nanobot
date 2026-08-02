@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState, type FormEvent } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 
-import { addApplicationEvent, archiveApplication, bindApplicationResume, correctApplicationEvent, createApplication, getApplication, getApplicationReviewTasks, getApplications, getDefaultResume, getJobPosts, resolveApplicationProposal, submitApplication, type Application, type ApplicationEvent, type ApplicationReviewTask, type ApplicationStatus } from "./api";
+import { addApplicationEvent, archiveApplication, bindApplicationResume, correctApplicationEvent, createApplication, generateApplicationResume, getApplication, getApplicationReviewTasks, getApplications, getJobPosts, getResumeSeries, resolveApplicationProposal, submitApplication, type Application, type ApplicationEvent, type ApplicationReviewTask, type ApplicationStatus } from "./api";
 import { chinaInputToIso, formatChinaTime, isoToChinaInput } from "./time";
 
 const STATUS_LABELS: Record<ApplicationStatus, string> = {
@@ -135,37 +135,83 @@ export function ApplicationDetailPage() {
 }
 
 function ResumeBindingPanel({ application, onSaved }: { application: Application; onSaved: () => Promise<void> }) {
-  const defaultResume = useQuery({ queryKey: ["default-resume"], queryFn: getDefaultResume });
+  const resumes = useQuery({ queryKey: ["resume-series"], queryFn: getResumeSeries });
+  const resumeItems = Array.isArray(resumes.data?.items) ? resumes.data.items : [];
+  const active = application.active_resume_binding;
+  const defaultVersionId = resumeItems.find(item => item.is_default)?.latest_finalized_version?.id ?? "";
+  const [selectedVersionId, setSelectedVersionId] = useState(active?.resume_version_id ?? "");
+  const [generationSourceId, setGenerationSourceId] = useState("");
+  useEffect(() => {
+    if (!selectedVersionId) setSelectedVersionId(active?.resume_version_id ?? defaultVersionId);
+  }, [active?.resume_version_id, defaultVersionId, selectedVersionId]);
+  useEffect(() => {
+    if (!generationSourceId && defaultVersionId) setGenerationSourceId(defaultVersionId);
+  }, [defaultVersionId, generationSourceId]);
   const bind = useMutation({
-    mutationFn: (selection: { resume_version_id?: string; use_default: boolean; reason: string }) =>
+    mutationFn: (selection: { resume_version_id?: string; use_default: boolean; reason: string; source?: "user" | "generated" }) =>
       bindApplicationResume(application, selection),
     onSuccess: onSaved,
   });
+  const generate = useMutation({
+    mutationFn: async (body: { source_resume_version_id: string | null; resume_name: string; prompt: string }) => {
+      const material = await generateApplicationResume({
+        application_id: application.id,
+        job_post_id: application.job_post_id,
+        ...body,
+      });
+      return bindApplicationResume(application, {
+        resume_version_id: material.current_version.id,
+        use_default: false,
+        source: "generated",
+        reason: "为当前岗位生成并绑定",
+      });
+    },
+    onSuccess: onSaved,
+  });
   const canReplace = ["discovered", "preparing_materials", "ready_to_apply"].includes(application.current_status);
-  const active = application.active_resume_binding;
-  const defaultVersionId = defaultResume.data?.latest_finalized_version?.id;
+  const libraryVersions = application.available_final_materials.filter(item => item.scope === "library");
+  const applicationVersions = application.available_final_materials.filter(item => item.scope === "application");
   return <section className="panel resume-binding-panel">
     <div className="panel-heading">
-      <div><p className="eyebrow">当前绑定简历</p><h2>{active ? `${active.resume_name} · v${active.version_number}` : "尚未选择实际投递简历"}</h2></div>
+      <div><p className="eyebrow">本次申请简历</p><h2>{active ? `${active.resume_name} · v${active.version_number}` : "选择或生成一份简历"}</h2></div>
       {active && <span className={`health-pill ${active.status === "locked" ? "ok" : ""}`}>{active.status === "locked" ? "已随投递锁定" : "投递前可替换"}</span>}
     </div>
-    {active ? <div className="binding-current"><strong>{active.version_title}</strong><p>来源：{bindingSourceLabel(active.source)}{active.reason ? ` · ${active.reason}` : ""}</p><small>绑定于 {formatChinaTime(active.created_at)}（北京时间） · 具体版本 {active.resume_version_id.slice(0, 8)}</small></div> : <p>绑定必须指向一个已定稿且已验证导出的具体版本。完成绑定后，申请才会进入待投递。</p>}
-    {canReplace && <div className="binding-controls">
-      <form onSubmit={(event) => {
+    {active && <div className="binding-current"><strong>{active.version_title}</strong><p>{bindingSourceLabel(active.source)}{active.reason ? ` · ${active.reason}` : ""}</p><small>{formatChinaTime(active.created_at)}（北京时间）</small></div>}
+    {canReplace && <div className="application-resume-workspace">
+      <form className="resume-binding-choice" onSubmit={(event) => {
         event.preventDefault();
-        const data = new FormData(event.currentTarget);
         bind.mutate({
-          resume_version_id: String(data.get("resume_version_id")),
+          resume_version_id: selectedVersionId,
           use_default: false,
           reason: active ? "投递前更换实际使用版本" : "选择实际投递版本",
         });
       }}>
-        <label>选择定稿版本<select name="resume_version_id" defaultValue={active?.resume_version_id ?? ""} required><option value="" disabled>选择具体简历版本</option>{application.available_final_materials.map(item => <option value={item.resume_version_id} key={item.resume_version_id}>{item.name} · v{item.version_number} · {item.title}</option>)}</select></label>
-        <button disabled={bind.isPending || !application.available_final_materials.length}>{active ? "替换绑定版本" : "绑定此版本"}</button>
+        <div><h3>从现有简历选择</h3><p>默认简历会自动选中，也可以改用本岗位已生成的版本。</p></div>
+        <label>简历版本<select name="resume_version_id" value={selectedVersionId} onChange={event => setSelectedVersionId(event.target.value)} required>
+          <option value="" disabled>选择具体简历版本</option>
+          {libraryVersions.length > 0 && <optgroup label="简历库">{libraryVersions.map(item => <option value={item.resume_version_id} key={item.resume_version_id}>{item.name} · v{item.version_number}{item.resume_version_id === defaultVersionId ? " · 默认" : ""}</option>)}</optgroup>}
+          {applicationVersions.length > 0 && <optgroup label="本岗位简历">{applicationVersions.map(item => <option value={item.resume_version_id} key={item.resume_version_id}>{item.name} · v{item.version_number}</option>)}</optgroup>}
+        </select></label>
+        <button disabled={bind.isPending || !selectedVersionId}>{bind.isPending ? "正在绑定…" : active ? "更换绑定" : "绑定简历"}</button>
       </form>
-      <div className="default-binding-action"><div><strong>快速使用默认简历</strong><p>{defaultResume.data && defaultVersionId ? `${defaultResume.data.name} · v${defaultResume.data.latest_finalized_version?.version_number}` : "尚未设置可用默认简历"}</p></div><button className="secondary" type="button" disabled={bind.isPending || !defaultVersionId || active?.resume_version_id === defaultVersionId} onClick={() => bind.mutate({ use_default: true, reason: "使用当前默认简历" })}>使用默认简历</button></div>
-      {!application.available_final_materials.length && <div className="notice"><strong>没有可绑定的定稿版本</strong><p>先完成材料定稿和 PDF 验证，再返回绑定。</p><Link to={`/job-posts/${application.job_post_id}/materials`}>准备申请材料</Link></div>}
-      {bind.error && <p className="form-error">{bind.error.message}</p>}
+      <form className="application-resume-generator" onSubmit={(event) => {
+        event.preventDefault();
+        const form = event.currentTarget;
+        const data = new FormData(form);
+        generate.mutate({
+          source_resume_version_id: generationSourceId || null,
+          resume_name: String(data.get("resume_name")),
+          prompt: String(data.get("prompt")),
+        }, { onSuccess: () => form.reset() });
+      }}>
+        <div><h3>生成岗位专属简历</h3><p>生成后绑定到本申请，不会自动投递。</p></div>
+        <label>参考简历<select name="source_resume_version_id" value={generationSourceId} onChange={event => setGenerationSourceId(event.target.value)}><option value="">不指定，由个人档案生成</option>{libraryVersions.map(item => <option value={item.resume_version_id} key={item.resume_version_id}>{item.name} · v{item.version_number}{item.resume_version_id === defaultVersionId ? " · 默认" : ""}</option>)}</select></label>
+        <label>简历名称<input name="resume_name" required defaultValue={`${application.job_title}简历`} /></label>
+        <label className="wide">生成要求<textarea name="prompt" required rows={3} placeholder="突出与岗位要求直接相关的经历，保持事实准确" /></label>
+        <button disabled={generate.isPending}>{generate.isPending ? "正在生成并绑定…" : "生成并绑定"}</button>
+      </form>
+      {!application.available_final_materials.length && <p className="resume-empty-inline">简历库为空。可以直接在右侧为当前岗位生成。</p>}
+      {(bind.error || generate.error) && <p className="form-error">{bind.error?.message ?? generate.error?.message}</p>}
     </div>}
     {application.resume_bindings.length > 1 && <details className="binding-history"><summary>绑定历史（{application.resume_bindings.length}）</summary>{[...application.resume_bindings].reverse().map(item => <div className="history-row" key={item.id}><strong>{item.resume_name} · v{item.version_number}</strong><small>{item.status === "replaced" ? "已替换" : item.status === "locked" ? "已锁定" : "当前使用"} · {bindingSourceLabel(item.source)} · {formatChinaTime(item.created_at)}（北京时间）</small></div>)}</details>}
   </section>;

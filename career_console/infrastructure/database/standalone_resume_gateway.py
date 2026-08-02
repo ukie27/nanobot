@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from typing import Any
 from uuid import uuid4
 
@@ -37,14 +38,14 @@ from career_console.infrastructure.database.profile_gateway import (
 )
 from career_console.infrastructure.database.review_runtime import (
     create_agent_run,
-    ensure_review_task,
     set_review_resolution,
 )
 
 
 class SqlAlchemyStandaloneResumeGateway:
-    def __init__(self, session_factory: sessionmaker[Session]) -> None:
+    def __init__(self, session_factory: sessionmaker[Session], publisher: Any) -> None:
         self._session_factory = session_factory
+        self._publisher = publisher
 
     def context(self, *, name: str, prompt: str) -> dict[str, Any]:
         normalized_name = name.strip()
@@ -57,7 +58,7 @@ class SqlAlchemyStandaloneResumeGateway:
             facts = self._facts(session)
             if not facts:
                 raise CareerDomainError(
-                    "至少需要一项已确认的职业事实。",
+                    "个人档案至少需要一项可用事实。",
                     code="confirmed_facts_required",
                 )
             fact_hash = self._fact_hash(facts)
@@ -67,6 +68,17 @@ class SqlAlchemyStandaloneResumeGateway:
                 "inputRevision": f"profile:{PROFILE_ID}:facts:{fact_hash}",
                 "resumeName": normalized_name[:300],
                 "userPrompt": normalized_prompt[:4_000],
+                "profileFacts": [
+                    {
+                        "id": item.id,
+                        "version": item.version,
+                        "category": item.category,
+                        "fieldKey": item.field_key,
+                        "value": item.value,
+                    }
+                    for item in facts
+                ],
+                # Kept for existing Agent prompt adapters during the schema transition.
                 "confirmedFacts": [
                     {
                         "id": item.id,
@@ -81,16 +93,8 @@ class SqlAlchemyStandaloneResumeGateway:
             }
 
     def existing(self, input_hash: str) -> dict[str, Any] | None:
-        with self._session_factory() as session:
-            row = session.scalar(
-                select(StandaloneResumeProposalModel)
-                .where(
-                    StandaloneResumeProposalModel.input_hash == input_hash,
-                    StandaloneResumeProposalModel.status == "proposed",
-                )
-                .order_by(StandaloneResumeProposalModel.created_at.desc())
-            )
-            return self._view(session, row) if row else None
+        del input_hash
+        return None
 
     def save(
         self,
@@ -114,41 +118,32 @@ class SqlAlchemyStandaloneResumeGateway:
                 audit=audit,
                 now=now,
             )
-            row = StandaloneResumeProposalModel(
-                id=str(uuid4()),
-                profile_id=PROFILE_ID,
-                resume_name=context["resumeName"],
-                user_prompt=context["userPrompt"],
-                fact_set_hash=context["factSetHash"],
-                schema_version=draft.schema_version,
-                content_json=draft.model_dump_json(by_alias=True),
-                input_hash=input_hash,
-                output_hash=output_hash,
-                status="proposed",
-                version=1,
-                drafter_run_id=run.id,
-                resume_id=None,
-                resume_version_id=None,
-                resolution_reason=None,
-                created_at=now,
-                resolved_at=None,
-            )
-            session.add(row)
-            session.flush()
-            ensure_review_task(
+            resume, version = self._promote(
                 session,
-                task_type="standalone_resume_review",
-                entity_type="standalone_resume_proposal",
-                entity_id=row.id,
-                title=f"确认新简历：{row.resume_name}",
-                summary=draft.rationale,
-                source_type="career_console_standalone_resume_drafter",
-                priority=20,
-                agent_run_id=run.id,
-                now=now,
+                SimpleNamespace(
+                    resume_name=context["resumeName"],
+                    content_json=draft.model_dump_json(by_alias=True),
+                    fact_set_hash=context["factSetHash"],
+                ),
+                now,
             )
             session.commit()
-            return self._view(session, row)
+            resume_id = resume.id
+            version_id = version.id
+            run_id = run.id
+        try:
+            detail = self._publisher.finalize_resume(
+                resume_id, expected_version_id=version_id
+            )
+        except Exception:
+            with self._session_factory() as cleanup:
+                resume = cleanup.get(ResumeModel, resume_id)
+                if resume is not None and resume.scope == "library":
+                    cleanup.delete(resume)
+                    cleanup.commit()
+            raise
+        detail["agent_run_id"] = run_id
+        return detail
 
     def save_failure(
         self,
@@ -237,6 +232,10 @@ class SqlAlchemyStandaloneResumeGateway:
             series_type="base",
             parent_resume_id=None,
             direction_label=None,
+            scope="library",
+            application_id=None,
+            source_file_name=None,
+            retired_at=None,
             created_at=now,
             updated_at=now,
         )

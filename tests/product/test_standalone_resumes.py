@@ -4,7 +4,9 @@ import asyncio
 import json
 from io import BytesIO
 from pathlib import Path
+from zipfile import is_zipfile
 
+import pytest
 from fastapi.testclient import TestClient
 from pypdf import PdfReader
 from sqlalchemy import func, select
@@ -16,10 +18,10 @@ from career_console.infrastructure.agents.material_drafting import (
 )
 from career_console.infrastructure.database.models import (
     AgentRunModel,
-    FactReferenceModel,
-    FactSnapshotModel,
+    ResumeDefaultModel,
     ResumeModel,
     ResumeVersionModel,
+    ReviewTaskModel,
     StandaloneResumeProposalModel,
 )
 from career_console.infrastructure.settings import CareerSettings
@@ -257,7 +259,7 @@ def _complete_profile(client: TestClient) -> tuple[dict, dict]:
 def _generate(client: TestClient) -> dict:
     client.app.state.standalone_resume_service.drafter = _StandaloneDrafter()
     response = client.post(
-        "/api/v1/resumes/agent-proposals",
+        "/api/v1/resumes/generate",
         json={
             "name": "后端开发通用简历",
             "prompt": "突出后端工程能力，保持事实准确并控制在两页内。",
@@ -267,36 +269,50 @@ def _generate(client: TestClient) -> dict:
     return response.json()
 
 
-def test_generation_requires_confirmed_facts(tmp_path: Path) -> None:
+def test_generation_requires_profile_facts(tmp_path: Path) -> None:
     with TestClient(create_app(_settings(tmp_path))) as client:
         client.app.state.standalone_resume_service.drafter = _StandaloneDrafter()
         response = client.post(
-            "/api/v1/resumes/agent-proposals",
+            "/api/v1/resumes/generate",
             json={"name": "通用简历", "prompt": "突出后端经历"},
         )
         assert response.status_code == 422, response.text
         assert response.json()["code"] == "confirmed_facts_required"
 
 
-def test_generation_creates_candidate_without_formal_resume(tmp_path: Path) -> None:
+def test_generation_publishes_library_resume_with_pdf_and_docx(tmp_path: Path) -> None:
     with TestClient(create_app(_settings(tmp_path))) as client:
-        _complete_profile(client)
-        proposal = _generate(client)
+        facts = _complete_profile(client)
+        resume = _generate(client)
 
-        assert proposal["status"] == "proposed"
-        assert proposal["resume_id"] is None
-        assert proposal["review_task_id"]
-        assert all(
-            not block["requirementIds"] for block in proposal["content"]["blocks"]
+        assert resume["scope"] == "library"
+        assert resume["application_id"] is None
+        assert resume["current_version"]["status"] == "final"
+        assert {item["format"] for item in resume["exports"]} == {"pdf", "docx"}
+        assert resume["docx_export"]["format"] == "docx"
+        evidence_ids = {
+            snapshot["fact_id"]
+            for block in resume["current_version"]["blocks"]
+            for snapshot in block["fact_snapshots"]
+        }
+        assert evidence_ids == {fact["id"] for fact in facts}
+
+        docx = client.get(resume["docx_export"]["download_url"])
+        assert docx.status_code == 200
+        assert docx.headers["content-type"].startswith(
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         )
+        assert is_zipfile(BytesIO(docx.content))
+
         with client.app.state.database.session_factory() as session:
             assert session.scalar(
                 select(func.count()).select_from(StandaloneResumeProposalModel)
-            ) == 1
-            assert session.scalar(select(func.count()).select_from(ResumeModel)) == 0
+            ) == 0
+            assert session.scalar(select(func.count()).select_from(ReviewTaskModel)) == 0
+            assert session.scalar(select(func.count()).select_from(ResumeModel)) == 1
             assert session.scalar(
                 select(func.count()).select_from(ResumeVersionModel)
-            ) == 0
+            ) == 1
 
 
 def test_invalid_agent_references_leave_failure_audit_only(tmp_path: Path) -> None:
@@ -306,7 +322,7 @@ def test_invalid_agent_references_leave_failure_audit_only(tmp_path: Path) -> No
 
         service.drafter = _UnknownFactDrafter()
         unknown_fact = client.post(
-            "/api/v1/resumes/agent-proposals",
+            "/api/v1/resumes/generate",
             json={"name": "非法事实简历", "prompt": "生成简历"},
         )
         assert unknown_fact.status_code == 422, unknown_fact.text
@@ -314,7 +330,7 @@ def test_invalid_agent_references_leave_failure_audit_only(tmp_path: Path) -> No
 
         service.drafter = _JobRequirementDrafter()
         job_requirement = client.post(
-            "/api/v1/resumes/agent-proposals",
+            "/api/v1/resumes/generate",
             json={"name": "混入岗位要求的简历", "prompt": "生成简历"},
         )
         assert job_requirement.status_code == 422, job_requirement.text
@@ -337,172 +353,79 @@ def test_invalid_agent_references_leave_failure_audit_only(tmp_path: Path) -> No
             }
 
 
-def test_profile_change_blocks_candidate_confirmation(tmp_path: Path) -> None:
+def test_import_publishes_resume_and_default_archive_lifecycle(tmp_path: Path) -> None:
     with TestClient(create_app(_settings(tmp_path))) as client:
-        first_fact, _ = _complete_profile(client)
-        proposal = _generate(client)
-        changed = client.post(
-            f"/api/v1/facts/{first_fact['id']}/edit",
-            json={
-                "expected_version": first_fact["version"],
-                "value": "熟练使用 Python 和 SQL",
-                "reason": "修正技能范围",
+        imported = client.post(
+            "/api/v1/resumes/import",
+            data={"name": "导入的通用简历"},
+            files={
+                "file": (
+                    "resume.txt",
+                    "技能\nPython、SQL\n项目经历\n负责后端服务交付".encode(),
+                    "text/plain",
+                )
             },
         )
-        assert changed.status_code == 200, changed.text
+        assert imported.status_code == 201, imported.text
+        resume = imported.json()
+        assert resume["scope"] == "library"
+        assert resume["source_file_name"] == "resume.txt"
+        assert resume["current_version"]["status"] == "final"
+        assert resume["docx_export"]["format"] == "docx"
 
-        resolved = client.post(
-            f"/api/v1/resumes/agent-proposals/{proposal['id']}/resolve",
-            json={
-                "expected_version": proposal["version"],
-                "resolution": "confirmed",
-                "reason": "确认创建",
-            },
+        made_default = client.put(
+            "/api/v1/resumes/default",
+            json={"resume_id": resume["id"], "expected_version": None},
         )
-        assert resolved.status_code == 409, resolved.text
+        assert made_default.status_code == 200, made_default.text
+        assert made_default.json()["is_default"] is True
+
+        archived = client.delete(f"/api/v1/resumes/{resume['id']}")
+        assert archived.status_code == 204, archived.text
+        assert client.get("/api/v1/resumes").json()["items"] == []
+        assert client.get("/api/v1/resumes/default").json() is None
         with client.app.state.database.session_factory() as session:
-            assert session.scalar(select(ResumeModel)) is None
+            stored = session.get(ResumeModel, resume["id"])
+            assert stored is not None and stored.retired_at is not None
+            assert session.scalar(select(ResumeDefaultModel)) is None
 
 
-def test_confirmation_creates_fact_bound_resume_version(tmp_path: Path) -> None:
-    with TestClient(create_app(_settings(tmp_path))) as client:
-        facts = _complete_profile(client)
-        proposal = _generate(client)
-        resolved = client.post(
-            f"/api/v1/resumes/agent-proposals/{proposal['id']}/resolve",
-            json={
-                "expected_version": proposal["version"],
-                "resolution": "confirmed",
-                "reason": "内容和依据已核对",
-            },
-        )
-        assert resolved.status_code == 200, resolved.text
-        result = resolved.json()
-        assert result["status"] == "confirmed"
-        assert result["resume_id"]
-        assert result["resume_version_id"]
-
-        detail = client.get(f"/api/v1/resumes/{result['resume_id']}")
-        assert detail.status_code == 200, detail.text
-        resume = detail.json()
-        assert resume["series_type"] == "base"
-        assert resume["current_version"]["version_scope"] == "base"
-        assert resume["current_version"]["version_number"] == 1
-        assert resume["current_version"]["status"] == "reviewed"
-        evidence_ids = {
-            snapshot["fact_id"]
-            for block in resume["current_version"]["blocks"]
-            for snapshot in block["fact_snapshots"]
-        }
-        assert evidence_ids == {fact["id"] for fact in facts}
-
-        with client.app.state.database.session_factory() as session:
-            version = session.get(
-                ResumeVersionModel, result["resume_version_id"]
-            )
-            assert version is not None
-            assert version.parent_version_id is None
-            assert session.scalar(
-                select(func.count()).select_from(FactSnapshotModel)
-            ) == 2
-            assert session.scalar(
-                select(func.count()).select_from(FactReferenceModel)
-            ) == 2
-
-
-def test_resume_edit_review_repair_finalize_and_export(tmp_path: Path) -> None:
+def test_export_failure_keeps_agent_audit_and_removes_provisional_resume(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     with TestClient(create_app(_settings(tmp_path))) as client:
         _complete_profile(client)
-        proposal = _generate(client)
-        confirmed = client.post(
-            f"/api/v1/resumes/agent-proposals/{proposal['id']}/resolve",
-            json={
-                "expected_version": proposal["version"],
-                "resolution": "confirmed",
-                "reason": "确认创建",
-            },
-        ).json()
-        resume = client.get(f"/api/v1/resumes/{confirmed['resume_id']}").json()
+        service = client.app.state.standalone_resume_service
+        service.drafter = _StandaloneDrafter()
 
-        edited = client.post(
-            f"/api/v1/resumes/{resume['id']}/versions",
-            json={
-                "expected_version_id": resume["current_version"]["id"],
-                "blocks": [
-                    {
-                        "id": block["id"],
-                        "text": (
-                            f"核心能力：{block['text']}"
-                            if index == 0
-                            else block["text"]
-                        ),
-                    }
-                    for index, block in enumerate(resume["current_version"]["blocks"])
-                ],
-            },
-        )
-        assert edited.status_code == 201, edited.text
-        resume = edited.json()
-        assert resume["current_version"]["version_number"] == 2
-        assert resume["current_version"]["parent_version_id"]
-        assert resume["current_version"]["status"] == "reviewed"
+        def fail_finalize(*args, **kwargs):
+            raise RuntimeError("export failed")
 
-        invented = client.post(
-            f"/api/v1/resumes/{resume['id']}/versions",
-            json={
-                "expected_version_id": resume["current_version"]["id"],
-                "blocks": [
-                    {
-                        "id": block["id"],
-                        "text": (
-                            f"曾担任首席架构师，{block['text']}"
-                            if index == 0
-                            else block["text"]
-                        ),
-                    }
-                    for index, block in enumerate(resume["current_version"]["blocks"])
-                ],
-            },
-        )
-        assert invented.status_code == 201, invented.text
-        resume = invented.json()
-        assert resume["current_version"]["status"] == "draft"
-        assert any(
-            finding["code"] == "unsupported_claim"
-            for finding in resume["review"]["findings"]
-        )
+        monkeypatch.setattr(service.gateway._publisher, "finalize_resume", fail_finalize)
+        with pytest.raises(RuntimeError, match="export failed"):
+            client.post(
+                "/api/v1/resumes/generate",
+                json={"name": "导出失败简历", "prompt": "突出后端能力"},
+            )
+        with client.app.state.database.session_factory() as session:
+            assert session.scalar(select(ResumeModel)) is None
+            run = session.scalar(
+                select(AgentRunModel).where(
+                    AgentRunModel.task_type == "standalone_resume_draft"
+                )
+            )
+            assert run is not None and run.status == "succeeded"
 
-        repaired = client.post(
-            f"/api/v1/resumes/{resume['id']}/versions",
-            json={
-                "expected_version_id": resume["current_version"]["id"],
-                "blocks": [
-                    {
-                        "id": block["id"],
-                        "text": block["fact_snapshots"][0]["value"],
-                    }
-                    for block in resume["current_version"]["blocks"]
-                ],
-            },
-        )
-        assert repaired.status_code == 201, repaired.text
-        resume = repaired.json()
-        assert resume["current_version"]["status"] == "reviewed"
 
-        reviewed = client.post(f"/api/v1/resumes/{resume['id']}/reviews")
-        assert reviewed.status_code == 201, reviewed.text
-        resume = reviewed.json()
-        assert resume["review"]["error_count"] == 0
-
-        finalized = client.post(
-            f"/api/v1/resumes/{resume['id']}/finalize",
-            json={"expected_version_id": resume["current_version"]["id"]},
-        )
-        assert finalized.status_code == 200, finalized.text
-        resume = finalized.json()
+def test_generated_resume_keeps_pdf_preview_compatibility(tmp_path: Path) -> None:
+    with TestClient(create_app(_settings(tmp_path))) as client:
+        _complete_profile(client)
+        resume = _generate(client)
         assert resume["current_version"]["status"] == "final"
         assert resume["export"]["text_layer_ok"] is True
         assert resume["export"]["render_ok"] is True
+        assert resume["export"]["format"] == "pdf"
 
         pdf_response = client.get(resume["export"]["download_url"])
         assert pdf_response.status_code == 200

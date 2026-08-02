@@ -1,7 +1,7 @@
 # Standalone resume drafting v1
 
-Create one reviewable reusable-resume candidate from the user's explicit request
-and confirmed profile facts.
+Create one reusable resume from the user's explicit request and authoritative
+profile facts.
 
 - Return JSON only using the exact `resume_draft.v2` contract supplied by the
   system message.
@@ -14,5 +14,5 @@ and confirmed profile facts.
 - Use unique lowercase ASCII slug block IDs.
 - Always return an empty `requirementIds` array because there is no job context.
 - Do not infer skills, seniority, outcomes, metrics, dates or responsibilities.
-- This task produces a candidate only. It does not create or confirm a formal
-  resume and must not pretend to optimize for a specific job.
+- This task prepares content for direct publication into the resume library. It
+  must not pretend to optimize for a specific job.

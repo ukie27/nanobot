@@ -277,7 +277,9 @@ class SqlAlchemyJobGateway:
             evidence_facts[item.id] = matches
             decision = EvidenceDecision.MATCHED if matches else EvidenceDecision.GAP
             rationale = (
-                "由已确认职业事实支持。" if matches else "未在已确认职业事实中找到可验证证据。"
+                "由个人档案中的权威事实支持。"
+                if matches
+                else "未在个人档案中找到可验证证据。"
             )
             evidence.append(
                 CandidateEvidence(item.id, decision, tuple(fact.id for fact in matches), rationale)

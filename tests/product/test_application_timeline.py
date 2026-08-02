@@ -208,7 +208,10 @@ def test_application_event_stream_material_snapshot_and_idempotency(tmp_path: Pa
         assert snapshot["resume_version_id"] == material["current_version"]["id"]
         assert snapshot["content_hash"] == material["current_version"]["content_hash"]
         assert snapshot["rendered_text"] == material["current_version"]["rendered_text"]
-        assert snapshot["export_sha256"] == material["export"]["sha256"]
+        docx_export = next(
+            item for item in material["exports"] if item["format"] == "docx"
+        )
+        assert snapshot["export_sha256"] == docx_export["sha256"]
 
         locked = client.post(
             f"/api/v1/applications/{application['id']}/resume-bindings",
@@ -636,9 +639,9 @@ def test_upgrade_from_part3_creates_backup_and_application_schema(tmp_path: Path
     with TestClient(create_app(settings)) as client:
         doctor = client.get("/api/v1/system/status")
         assert doctor.status_code == 200
-        assert doctor.json()["database_revision"] == "20260801_0034"
+        assert doctor.json()["database_revision"] == "20260802_0035"
 
-    assert list(settings.backups_dir.glob("*pre-202608010034.sqlite3"))
+    assert list(settings.backups_dir.glob("*pre-202608020035.sqlite3"))
     with sqlite3.connect(settings.database_path) as connection:
         tables = {
             row[0]
@@ -665,28 +668,38 @@ def test_application_resume_lifecycle_migration_round_trip(tmp_path: Path) -> No
     settings.ensure_directories()
     config = alembic_config(settings)
 
-    command.upgrade(config, "20260729_0031")
-    assert database_revision(settings.database_path) == "20260729_0031"
+    command.upgrade(config, "20260801_0034")
+    assert database_revision(settings.database_path) == "20260801_0034"
 
-    command.downgrade(config, "20260728_0030")
-    assert database_revision(settings.database_path) == "20260728_0030"
+    command.upgrade(config, "20260802_0035")
+    assert database_revision(settings.database_path) == "20260802_0035"
     with sqlite3.connect(settings.database_path) as connection:
-        tables = {
-            row[0]
+        resume_columns = {
+            row[1] for row in connection.execute("PRAGMA table_info(resumes)").fetchall()
+        }
+        snapshot_columns = {
+            row[1]: row[3]
             for row in connection.execute(
-                "SELECT name FROM sqlite_master WHERE type='table'"
+                "PRAGMA table_info(application_material_snapshots)"
             ).fetchall()
         }
-    assert "application_resume_bindings" not in tables
-    assert "resume_defaults" not in tables
+    assert {"scope", "application_id", "source_file_name", "retired_at"} <= resume_columns
+    assert snapshot_columns["material_draft_id"] == 0
 
-    command.upgrade(config, "20260729_0031")
-    assert database_revision(settings.database_path) == "20260729_0031"
+    command.downgrade(config, "20260801_0034")
+    assert database_revision(settings.database_path) == "20260801_0034"
     with sqlite3.connect(settings.database_path) as connection:
-        tables = {
-            row[0]
+        resume_columns = {
+            row[1] for row in connection.execute("PRAGMA table_info(resumes)").fetchall()
+        }
+        snapshot_columns = {
+            row[1]: row[3]
             for row in connection.execute(
-                "SELECT name FROM sqlite_master WHERE type='table'"
+                "PRAGMA table_info(application_material_snapshots)"
             ).fetchall()
         }
-    assert {"application_resume_bindings", "resume_defaults"} <= tables
+    assert "scope" not in resume_columns
+    assert snapshot_columns["material_draft_id"] == 1
+
+    command.upgrade(config, "20260802_0035")
+    assert database_revision(settings.database_path) == "20260802_0035"

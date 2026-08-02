@@ -14,8 +14,12 @@ from career_console.domain.materials import FactSnapshot, MaterialBlock, review_
 
 
 class MaterialAgentApplicationService:
-    def __init__(self, gateway: Any, drafter: ResumeDrafter | None,
-                 reviewer: MaterialReviewer | None) -> None:
+    def __init__(
+        self,
+        gateway: Any,
+        drafter: ResumeDrafter | None,
+        reviewer: MaterialReviewer | None,
+    ) -> None:
         self.gateway = gateway
         self.drafter = drafter
         self.reviewer = reviewer
@@ -77,6 +81,115 @@ class MaterialAgentApplicationService:
             review_audit=self._audit(self.reviewer, review_started_at, review_started),
         )
 
+    def generate_for_application(
+        self,
+        application_id: str,
+        *,
+        job_id: str,
+        source_resume_version_id: str | None,
+        resume_name: str,
+        prompt: str,
+    ) -> dict[str, Any]:
+        if self.drafter is None or self.reviewer is None:
+            raise CareerDomainError(
+                "材料 Drafter/Reviewer 未配置，请先配置模型提供方。",
+                code="material_agent_unavailable",
+            )
+        context = self.gateway.application_context(
+            application_id,
+            job_id=job_id,
+            source_resume_version_id=source_resume_version_id,
+            resume_name=resume_name,
+            prompt=prompt,
+        )
+        input_hash = self._hash(context)
+        draft_started_at = datetime.now(UTC)
+        draft_started = perf_counter()
+        draft = None
+        try:
+            draft = self.drafter.draft(context=context)
+            self._validate_draft(draft, context)
+        except Exception as exc:
+            code = (
+                exc.code
+                if isinstance(exc, CareerDomainError)
+                else "resume_draft_agent_failed"
+            )
+            self.gateway.save_failure(
+                context=context,
+                input_hash=input_hash,
+                stage="draft",
+                error_code=code,
+                draft=None,
+                draft_audit=self._audit(
+                    self.drafter, draft_started_at, draft_started
+                ),
+                review_audit=None,
+            )
+            if isinstance(exc, CareerDomainError):
+                raise
+            raise CareerDomainError("Drafter 执行失败。", code=code) from exc
+        draft_audit = self._audit(self.drafter, draft_started_at, draft_started)
+        draft_output = draft.model_dump(mode="json", by_alias=True)
+        reviewer_context = {
+            "schemaVersion": "material_review_context.v2",
+            "businessTimezone": "Asia/Shanghai",
+            "job": context["job"],
+            "requirements": context["requirements"],
+            "profileFacts": context["profileFacts"],
+            "confirmedFacts": context["profileFacts"],
+            "draft": draft_output,
+        }
+        review_started_at = datetime.now(UTC)
+        review_started = perf_counter()
+        try:
+            review = self.reviewer.review(context=reviewer_context)
+            block_ids = {item.block_id for item in draft.blocks}
+            if any(
+                item.block_id is not None and item.block_id not in block_ids
+                for item in review.findings
+            ):
+                raise CareerDomainError(
+                    "Reviewer 引用了未知 blockId。",
+                    code="material_review_block_invalid",
+                )
+            if review.verdict != "pass":
+                raise CareerDomainError(
+                    "Agent 复核发现阻断问题，请调整要求后重新生成。",
+                    code="agent_material_review_blocked",
+                )
+        except Exception as exc:
+            code = (
+                exc.code
+                if isinstance(exc, CareerDomainError)
+                else "material_review_agent_failed"
+            )
+            self.gateway.save_failure(
+                context=context,
+                input_hash=input_hash,
+                stage="review",
+                error_code=code,
+                draft=draft,
+                draft_audit=draft_audit,
+                review_audit=self._audit(
+                    self.reviewer, review_started_at, review_started
+                ),
+            )
+            if isinstance(exc, CareerDomainError):
+                raise
+            raise CareerDomainError("Reviewer 执行失败。", code=code) from exc
+        return self.gateway.save_application_material(
+            context=context,
+            draft=draft,
+            review=review,
+            input_hash=input_hash,
+            output_hash=self._hash(draft_output),
+            draft_audit=draft_audit,
+            review_audit=self._audit(
+                self.reviewer, review_started_at, review_started
+            ),
+        )
+
     def list_for_job(self, job_id: str) -> dict[str, Any]:
         items = self.gateway.list_for_job(job_id)
         return {"items": items, "total": len(items)}
@@ -88,7 +201,10 @@ class MaterialAgentApplicationService:
 
     @staticmethod
     def _validate_draft(draft: Any, context: dict[str, Any]) -> None:
-        facts = {item["id"]: item for item in context["confirmedFacts"]}
+        facts = {
+            item["id"]: item
+            for item in context.get("profileFacts", context["confirmedFacts"])
+        }
         requirement_ids = {item["id"] for item in context["requirements"]}
         for block in draft.blocks:
             if not set(block.fact_ids) <= set(facts):

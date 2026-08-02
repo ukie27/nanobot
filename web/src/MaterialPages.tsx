@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState, type FormEvent } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 
-import { createApplication, editMaterial, editResume, finalizeMaterial, finalizeResume, forkResumeFromMaterial, generateMaterialAgentProposal, generateStandaloneResumeProposal, getApplications, getDefaultResume, getJobPosts, getMaterial, getMaterialAgentProposals, getMaterials, getResume, getResumeDirections, getResumeSeries, getResumeVersionDiff, getStandaloneResumeProposals, resolveMaterialAgentProposal, resolveStandaloneResumeProposal, reviewMaterial, reviewResume, setDefaultResume, type Material, type MaterialAgentProposal, type MaterialType, type ResumeDetail, type ResumeSeries, type StandaloneResumeProposal } from "./api";
+import { createApplication, deleteResume, editMaterial, finalizeMaterial, forkResumeFromMaterial, generateResume, getApplicationResumes, getApplications, getDefaultResume, getJobPosts, getMaterial, getMaterials, getResume, getResumeSeries, getResumeVersionDiff, importResume, saveApplicationResumeToLibrary, reviewMaterial, setDefaultResume, type ApplicationStatus, type Material, type MaterialType, type ResumeSeries } from "./api";
 import { formatChinaTime } from "./time";
 
 const TYPE_LABELS: Record<MaterialType, string> = { resume: "定制简历", cover_letter: "求职信", introduction: "自我介绍" };
@@ -10,25 +10,29 @@ const STATUS_LABELS: Record<string, string> = { draft: "需要修复", reviewed:
 
 export function MaterialsPage() {
   const client = useQueryClient();
+  const [tab, setTab] = useState<"library" | "application">("library");
+  const [copyingResumeId, setCopyingResumeId] = useState<string | null>(null);
   const resumes = useQuery({ queryKey: ["resume-series"], queryFn: getResumeSeries });
+  const applicationResumes = useQuery({ queryKey: ["application-resumes"], queryFn: getApplicationResumes });
   const defaultResume = useQuery({ queryKey: ["default-resume"], queryFn: getDefaultResume });
-  const proposals = useQuery({ queryKey: ["standalone-resume-proposals"], queryFn: getStandaloneResumeProposals });
-  const [generatedNotice, setGeneratedNotice] = useState(false);
   const generate = useMutation({
-    mutationFn: generateStandaloneResumeProposal,
-    onMutate: () => setGeneratedNotice(false),
+    mutationFn: generateResume,
     onSuccess: async () => {
-      setGeneratedNotice(true);
-      await client.invalidateQueries({ queryKey: ["standalone-resume-proposals"] });
+      await client.invalidateQueries({ queryKey: ["resume-series"] });
     },
   });
-  const resolve = useMutation({
-    mutationFn: ({ proposal, resolution }: { proposal: StandaloneResumeProposal; resolution: "confirmed" | "rejected" }) =>
-      resolveStandaloneResumeProposal(proposal, resolution),
+  const importFile = useMutation({
+    mutationFn: ({ name, file }: { name: string; file: File }) => importResume(name, file),
+    onSuccess: async () => {
+      await client.invalidateQueries({ queryKey: ["resume-series"] });
+    },
+  });
+  const archive = useMutation({
+    mutationFn: deleteResume,
     onSuccess: async () => {
       await Promise.all([
-        client.invalidateQueries({ queryKey: ["standalone-resume-proposals"] }),
         client.invalidateQueries({ queryKey: ["resume-series"] }),
+        client.invalidateQueries({ queryKey: ["default-resume"] }),
       ]);
     },
   });
@@ -41,7 +45,15 @@ export function MaterialsPage() {
       ]);
     },
   });
-  function submit(event: FormEvent<HTMLFormElement>) {
+  const copyToLibrary = useMutation({
+    mutationFn: ({ resumeId, name }: { resumeId: string; name: string }) =>
+      saveApplicationResumeToLibrary(resumeId, name),
+    onSuccess: async () => {
+      setCopyingResumeId(null);
+      await client.invalidateQueries({ queryKey: ["resume-series"] });
+    },
+  });
+  function submitGeneration(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = event.currentTarget;
     const data = new FormData(form);
@@ -50,90 +62,117 @@ export function MaterialsPage() {
       { onSuccess: () => form.reset() },
     );
   }
-  return <><header className="page-header"><div><p className="eyebrow">我的资料</p><h1>我的简历</h1><p>维护可复用简历版本。针对具体岗位的定制，请从目标岗位进入。</p></div><span className="health-pill ok">{resumes.data?.total ?? 0} 份</span></header>
-    <section className="panel resume-generator"><div><p className="eyebrow">Agent 生成 · 需要确认</p><h2>按你的要求创建一份简历</h2><p>Agent 只使用已确认的职业事实。生成结果先作为候选，确认后才创建正式简历版本。</p></div><form className="form-grid" onSubmit={submit}><label>简历名称<input name="name" required placeholder="例如：后端开发通用简历" /></label><label className="wide">生成要求<textarea name="prompt" required rows={4} placeholder="例如：突出 Python 后端、Agent 应用和项目交付经历，整体控制在两页内" /></label><button disabled={generate.isPending}>{generate.isPending ? "Agent 正在生成…" : "生成简历候选"}</button>{generate.error && <p className="form-error">{generate.error.message}</p>}</form></section>
-    {generatedNotice && <section className="notice success" role="status">简历候选已生成，请在下方核对内容和事实依据。确认前不会创建正式简历。</section>}
-    <section className="panel resume-proposals"><div className="panel-heading"><div><p className="eyebrow">生成结果</p><h2>待确认候选</h2></div><span>{proposals.data?.items.filter(item => item.status === "proposed").length ?? 0} 待确认</span></div>
-      {proposals.data?.items.map((proposal, index) => <details className="resume-proposal" key={proposal.id} open={index === 0 && proposal.status === "proposed" ? true : undefined}><summary><span><strong>{proposal.resume_name}</strong><small>{proposal.content.rationale}</small></span><span className={`health-pill ${proposal.status === "confirmed" ? "ok" : proposal.status === "rejected" ? "blocked" : ""}`}>{proposal.status === "proposed" ? "待确认" : proposal.status === "confirmed" ? "已创建" : "已拒绝"}</span></summary><div className="resume-proposal-body"><p><strong>你的要求：</strong>{proposal.user_prompt}</p>{proposal.content.blocks.map(block => <article className="finding info" key={block.blockId}><strong>{block.section}</strong><p>{block.text}</p><details><summary>查看事实依据</summary><small>{block.factIds.join("、")}</small></details></article>)}{proposal.status === "proposed" && <div className="button-row"><button className="secondary" disabled={resolve.isPending} onClick={() => resolve.mutate({ proposal, resolution: "rejected" })}>拒绝</button><button disabled={resolve.isPending} onClick={() => resolve.mutate({ proposal, resolution: "confirmed" })}>{resolve.isPending ? "正在确认…" : "确认并创建简历"}</button></div>}{proposal.resume_id && <Link className="download-button secondary" to={`/resumes/${proposal.resume_id}`}>查看已创建简历</Link>}</div></details>)}
-      {!proposals.data?.items.length && <p>还没有生成记录。填写名称和要求后，候选会显示在这里。</p>}
-      {resolve.error && <p className="form-error">{resolve.error.message}</p>}
-    </section>
-    <section className="panel resume-library"><div className="panel-heading"><div><p className="eyebrow">正式资产</p><h2>简历版本库</h2></div><Link to="/job-posts">前往目标岗位定制</Link></div>
-      {resumes.data?.items.map(resume => <div className="resume-series-row" key={resume.id}><Link to={`/resumes/${resume.id}`}><strong>{resume.series_type === "base" ? "基础简历" : "方向简历"} · {resume.name}</strong><small>{resume.direction_label ? `${resume.direction_label} · ` : ""}{resume.latest_finalized_version ? `最新定稿 v${resume.latest_finalized_version.version_number}` : resume.latest_version ? `最新版本 v${resume.latest_version.version_number}，尚未定稿` : "尚无版本"}</small></Link>{resume.is_default ? <span className="health-pill ok">默认简历</span> : <button type="button" className="secondary" disabled={!resume.latest_finalized_version || makeDefault.isPending} onClick={() => makeDefault.mutate(resume)}>{resume.latest_finalized_version ? "设为默认" : "定稿后可设置"}</button>}</div>)}
-      {!resumes.data?.items.length && <div className="empty-state"><h2>还没有正式简历</h2><p>可以先由 Agent 生成候选并确认，或在岗位定制完成后保存为可复用版本。</p></div>}
-      {makeDefault.error && <p className="form-error">{makeDefault.error.message}</p>}
-    </section></>;
+  function submitImport(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const data = new FormData(form);
+    const file = data.get("file");
+    if (!(file instanceof File) || !file.size) return;
+    importFile.mutate(
+      { name: String(data.get("name")), file },
+      { onSuccess: () => form.reset() },
+    );
+  }
+  const libraryCount = resumes.data?.total ?? 0;
+  const applicationCount = applicationResumes.data?.total ?? 0;
+  return <><header className="page-header"><div><p className="eyebrow">个人资料</p><h1>我的简历</h1></div><span className="health-pill ok">{libraryCount + applicationCount} 份</span></header>
+    <div className="resume-tabs" role="tablist" aria-label="简历类型">
+      <button type="button" role="tab" aria-selected={tab === "library"} className={tab === "library" ? "active" : ""} onClick={() => setTab("library")}>简历库 <span>{libraryCount}</span></button>
+      <button type="button" role="tab" aria-selected={tab === "application"} className={tab === "application" ? "active" : ""} onClick={() => setTab("application")}>投递岗位简历 <span>{applicationCount}</span></button>
+    </div>
+    {tab === "library" ? <>
+      <section className="resume-workbench">
+        <form className="resume-action-form" onSubmit={submitGeneration}>
+          <div><h2>生成简历</h2></div>
+          <label>简历名称<input name="name" required placeholder="后端开发通用简历" /></label>
+          <label className="wide">生成要求<textarea name="prompt" required rows={3} placeholder="突出后端工程和项目交付经历，控制在两页内" /></label>
+          <button disabled={generate.isPending}>{generate.isPending ? "正在生成…" : "生成并加入简历库"}</button>
+          {generate.error && <p className="form-error">{generate.error.message}</p>}
+        </form>
+        <form className="resume-action-form resume-import-form" onSubmit={submitImport}>
+          <div><h2>导入简历</h2></div>
+          <label>简历名称<input name="name" required placeholder="现有通用简历" /></label>
+          <label className="wide">选择文件<input name="file" type="file" required accept=".docx,.pdf,.txt,.md,.markdown" /></label>
+          <button className="secondary" disabled={importFile.isPending}>{importFile.isPending ? "正在导入…" : "导入到简历库"}</button>
+          {importFile.error && <p className="form-error">{importFile.error.message}</p>}
+        </form>
+      </section>
+      <section className="resume-inventory" aria-label="简历库">
+        <div className="resume-inventory-heading"><h2>简历库</h2><Link to="/job-posts">目标岗位</Link></div>
+        {resumes.data?.items.map(resume => <article className="resume-inventory-row" key={resume.id}>
+          <button type="button" className={`resume-star ${resume.is_default ? "active" : ""}`} title={resume.is_default ? "默认简历" : "设为默认简历"} aria-label={resume.is_default ? `${resume.name}是默认简历` : `将${resume.name}设为默认简历`} disabled={makeDefault.isPending || resume.is_default} onClick={() => makeDefault.mutate(resume)}>{resume.is_default ? "★" : "☆"}</button>
+          <Link className="resume-row-main" to={`/resumes/${resume.id}`}><strong>{resume.name}</strong><small>{resume.source_file_name ? `导入自 ${resume.source_file_name}` : "Agent 生成"} · v{resume.latest_finalized_version?.version_number ?? 1}</small></Link>
+          <div className="resume-row-actions">
+            {resume.docx_export && <a className="text-button" href={resume.docx_export.download_url} title="下载 Word 简历">下载 DOCX</a>}
+            <button type="button" className="text-button danger-text" disabled={archive.isPending} onClick={() => { if (window.confirm(`归档“${resume.name}”？已绑定和已投递的版本不会受影响。`)) archive.mutate(resume.id); }}>归档</button>
+          </div>
+        </article>)}
+        {!resumes.data?.items.length && <div className="resume-empty"><h2>简历库为空</h2><p>生成一份简历，或导入已有文件。</p></div>}
+        {(makeDefault.error || archive.error) && <p className="form-error">{makeDefault.error?.message ?? archive.error?.message}</p>}
+      </section>
+    </> : <section className="resume-inventory" aria-label="投递岗位简历">
+      <div className="resume-inventory-heading"><h2>投递岗位简历</h2><Link to="/applications">申请进度</Link></div>
+      {applicationResumes.data?.items.map(resume => <article className="resume-inventory-row application-resume-row" key={resume.id}>
+        <span className="resume-scope-mark" aria-hidden="true">↗</span>
+        <div className="resume-row-main"><strong>{resume.company} · {resume.job_title}</strong><small>{resume.name} · {applicationStatusLabel(resume.application_status)}</small></div>
+        <div className="resume-row-actions">
+          {resume.docx_export && <a className="text-button" href={resume.docx_export.download_url}>下载 DOCX</a>}
+          <button type="button" className="text-button" onClick={() => setCopyingResumeId(copyingResumeId === resume.id ? null : resume.id)}>保存到简历库</button>
+        </div>
+        {copyingResumeId === resume.id && <form className="resume-copy-form" onSubmit={(event) => { event.preventDefault(); const data = new FormData(event.currentTarget); copyToLibrary.mutate({ resumeId: resume.id, name: String(data.get("name")) }); }}><input name="name" required defaultValue={`${resume.job_title ?? resume.name}简历`} aria-label="保存后的简历名称" /><button disabled={copyToLibrary.isPending}>{copyToLibrary.isPending ? "正在保存…" : "保存"}</button></form>}
+      </article>)}
+      {!applicationResumes.data?.items.length && <div className="resume-empty"><h2>暂无岗位简历</h2><p>从申请进度中为具体岗位生成。</p></div>}
+      {copyToLibrary.error && <p className="form-error">{copyToLibrary.error.message}</p>}
+    </section>}
+  </>;
 }
 
 export function JobMaterialsPage() {
   const { id: jobId = "" } = useParams();
   const navigate = useNavigate();
   const client = useQueryClient();
-  const [resumeId, setResumeId] = useState("");
-  const [resumeName, setResumeName] = useState("");
   const jobs = useQuery({ queryKey: ["job-posts"], queryFn: getJobPosts });
-  const materials = useQuery({ queryKey: ["materials"], queryFn: getMaterials });
-  const resumes = useQuery({ queryKey: ["resume-series"], queryFn: getResumeSeries });
-  const directions = useQuery({ queryKey: ["resume-directions", jobId], queryFn: () => getResumeDirections(jobId), enabled: Boolean(jobId) });
-  const proposals = useQuery({ queryKey: ["material-agent-proposals", jobId], queryFn: () => getMaterialAgentProposals(jobId), enabled: Boolean(jobId) });
-  const generate = useMutation({
-    mutationFn: () => generateMaterialAgentProposal({
-      job_post_id: jobId,
-      resume_name: resumeId ? (resumes.data?.items.find(item => item.id === resumeId)?.name ?? "岗位定制简历") : resumeName,
-      ...(resumeId ? { resume_id: resumeId } : {}),
-    }),
-    onSuccess: () => client.invalidateQueries({ queryKey: ["material-agent-proposals", jobId] }),
-  });
-  const resolve = useMutation({
-    mutationFn: ({ proposal, resolution }: { proposal: MaterialAgentProposal; resolution: "confirmed" | "rejected" }) => resolveMaterialAgentProposal(proposal, resolution),
-    onSuccess: async proposal => {
-      await Promise.all([
-        client.invalidateQueries({ queryKey: ["material-agent-proposals", jobId] }),
-        client.invalidateQueries({ queryKey: ["materials"] }),
-        client.invalidateQueries({ queryKey: ["resume-series"] }),
-      ]);
-      if (proposal.material_draft_id) navigate(`/materials/${proposal.material_draft_id}`);
+  const applications = useQuery({ queryKey: ["applications"], queryFn: getApplications });
+  const create = useMutation({
+    mutationFn: () => createApplication(jobId),
+    onSuccess: async application => {
+      await client.invalidateQueries({ queryKey: ["applications"] });
+      navigate(`/applications/${application.id}`);
     },
   });
   const job = jobs.data?.items.find(item => item.id === jobId);
-  const activeDirection = directions.data?.selections.find(item => item.status === "active");
-  const jobReady = Boolean(job?.requirement_count && job.latest_analysis);
-  const disabledReason = !jobReady
-    ? "岗位尚未完成有效分析，请先返回岗位详情重新分析。"
-    : !activeDirection
-      ? "请先在岗位详情选择并确认简历方向。"
-      : !resumeId && !resumeName.trim()
-        ? "选择已有简历，或填写新简历名称。"
-        : null;
-  const jobMaterials = materials.data?.items.filter(item => item.job_post_id === jobId) ?? [];
-  return <><header className="page-header"><div><p className="eyebrow">岗位申请材料</p><h1>{job ? `${job.company} · ${job.title}` : "岗位材料"}</h1><p>这里只处理当前岗位的简历选择与定制，不会改写简历库中的上游版本。</p></div><span className="health-pill ok">{jobMaterials.length} 份</span></header>
-    <section className="panel material-create"><div><p className="eyebrow">Agent 定制 · 需要确认</p><h2>选择来源并生成岗位版本</h2><p>可以从已有简历开始，也可以基于已确认职业事实新建一份。Agent 会结合岗位要求和已确认方向生成候选。</p></div><div className="form-grid"><label>来源简历<select value={resumeId} onChange={event => setResumeId(event.target.value)}><option value="">不使用已有版本，创建新简历</option>{resumes.data?.items.map(resume => <option value={resume.id} key={resume.id} disabled={!resume.latest_version}>{resume.name}{resume.latest_finalized_version ? ` · 定稿 v${resume.latest_finalized_version.version_number}` : " · 未定稿"}</option>)}</select></label>{!resumeId && <label>新简历名称<input value={resumeName} onChange={event => setResumeName(event.target.value)} placeholder="例如：某公司后端岗位简历" /></label>}<div className="wide">{activeDirection && <p className="form-hint">已确认方向：{activeDirection.selected_directions.map(item => item.name).join(" + ")}</p>}<button onClick={() => generate.mutate()} disabled={generate.isPending || Boolean(disabledReason)}>{generate.isPending ? "Agent 正在生成并检查…" : "生成岗位定制候选"}</button>{disabledReason && <p className="disabled-reason">{disabledReason} {!activeDirection && jobReady && <Link to={`/job-posts/${jobId}`}>返回选择方向</Link>}</p>}{generate.error && <p className="form-error">{generate.error.message}</p>}</div></div></section>
-    <section className="panel"><div className="panel-heading"><div><p className="eyebrow">生成结果</p><h2>岗位定制候选</h2></div><span>{proposals.data?.items.filter(item => item.status === "proposed").length ?? 0} 待确认</span></div>{proposals.data?.items.map(proposal => <details className="resume-proposal" key={proposal.id} open={proposal.status === "proposed" ? true : undefined}><summary><span><strong>{proposal.content.title}</strong><small>{proposal.content.rationale}</small></span><span className={`health-pill ${proposal.review.verdict === "pass" ? "ok" : "blocked"}`}>{proposal.review.verdict === "pass" ? "检查通过" : "需要修订"}</span></summary><div className="resume-proposal-body">{proposal.content.blocks.map(block => <article className="finding info" key={block.blockId}><strong>{block.section}</strong><p>{block.text}</p><details><summary>查看引用依据</summary><small>职业事实：{block.factIds.join("、")} · 岗位要求：{block.requirementIds.join("、") || "无"}</small></details></article>)}{proposal.review.findings.map((finding, index) => <div className={`finding ${finding.severity}`} key={`${finding.code}-${index}`}><strong>{finding.severity === "error" ? "阻断" : "提醒"} · {finding.code}</strong><p>{finding.message}</p></div>)}{proposal.status === "proposed" && <div className="button-row"><button className="secondary" onClick={() => resolve.mutate({ proposal, resolution: "rejected" })}>拒绝</button><button onClick={() => resolve.mutate({ proposal, resolution: "confirmed" })} disabled={proposal.review.verdict !== "pass" || resolve.isPending}>确认并创建岗位材料</button></div>}</div></details>)}{!proposals.data?.items.length && <p>尚无岗位定制候选。生成后先在这里核对，再写入申请材料。</p>}</section>
-    <section className="job-list material-list">{jobMaterials.map(item => <Link className="panel job-card" to={`/materials/${item.id}`} key={item.id}><div><span className="category-tag">{TYPE_LABELS[item.material_type]}</span><h2>{item.name}</h2><p>岗位定制版本 v{item.current_version_number}</p></div><span className={`health-pill ${!item.strategy_stale && (item.status === "final" || item.status === "reviewed") ? "ok" : "blocked"}`}>{item.strategy_stale ? "需要重新检查" : STATUS_LABELS[item.status]}</span></Link>)}</section>
+  const application = applications.data?.items.find(item => item.job_post_id === jobId && item.current_status !== "archived");
+  if (application) return <section className="empty-state"><h2>在申请进度中准备简历</h2><button onClick={() => navigate(`/applications/${application.id}`)}>进入申请</button></section>;
+  return <><header className="page-header"><div><p className="eyebrow">目标岗位</p><h1>{job ? `${job.company} · ${job.title}` : "岗位简历"}</h1></div></header>
+    <section className="empty-state"><h2>先建立申请进度</h2><p>建立后可选择简历库版本，或生成一份岗位专属简历。</p><button disabled={create.isPending || !job} onClick={() => create.mutate()}>{create.isPending ? "正在建立…" : "建立申请并准备简历"}</button>{create.error && <p className="form-error">{create.error.message}</p>}</section>
   </>;
+}
+
+function applicationStatusLabel(status: ApplicationStatus | null) {
+  const labels: Partial<Record<ApplicationStatus, string>> = {
+    preparing_materials: "准备材料",
+    ready_to_apply: "待投递",
+    submitted: "已投递",
+    application_confirmed: "网申确认",
+    assessment: "测评",
+    written_test: "笔试",
+    interview: "面试",
+  };
+  return status ? labels[status] ?? "流程进行中" : "申请流程";
 }
 
 export function ResumeDetailPage() {
   const { id = "" } = useParams();
-  const client = useQueryClient();
   const query = useQuery({ queryKey: ["resume", id], queryFn: () => getResume(id), enabled: Boolean(id) });
-  const refresh = async () => {
-    await Promise.all([
-      client.invalidateQueries({ queryKey: ["resume", id] }),
-      client.invalidateQueries({ queryKey: ["resume-series"] }),
-    ]);
-  };
-  const review = useMutation({ mutationFn: () => reviewResume(id), onSuccess: refresh });
-  const finalize = useMutation({ mutationFn: (resume: ResumeDetail) => finalizeResume(resume), onSuccess: refresh });
   if (query.isLoading) return <section className="empty-state"><p>正在读取简历版本…</p></section>;
   if (query.error || !query.data) return <section className="notice error">{query.error?.message ?? "简历不存在"}</section>;
   const resume = query.data;
-  return <><header className="page-header"><div><p className="eyebrow">{resume.series_type === "base" ? "基础简历" : "方向简历"}</p><h1>{resume.name}</h1><p>这里维护可复用简历本身。岗位匹配与岗位定制不会在此页面执行。</p></div><span className={`health-pill ${resume.current_version.status === "draft" ? "blocked" : "ok"}`}>{STATUS_LABELS[resume.current_version.status] ?? resume.current_version.status}</span></header>
-    <section className="metric-grid"><article><span>当前版本</span><strong>v{resume.current_version.version_number}</strong><small>{formatChinaTime(resume.current_version.created_at)}（北京时间）</small></article><article><span>内容块</span><strong>{resume.current_version.blocks.length}</strong><small>均保留事实快照</small></article><article><span>复核</span><strong>{resume.review?.error_count ?? 0} 错误</strong><small>{resume.review?.warning_count ?? 0} 条提醒</small></article><article><span>导出</span><strong>{resume.export ? `${resume.export.page_count} 页` : "未生成"}</strong><small>{resume.export ? "PDF 已验证" : "定稿后生成"}</small></article></section>
-    {resume.review?.findings.length ? <section className="panel findings"><div className="panel-heading"><h2>复核发现</h2><span>{resume.review.findings.length} 项</span></div>{resume.review.findings.map(item => <div className={`finding ${item.severity}`} key={item.id}><strong>{item.severity === "error" ? "阻断" : "提醒"} · {item.code}</strong><p>{item.message}</p></div>)}</section> : <section className="notice success">当前版本未发现事实支持问题。</section>}
-    <ResumeEditor resume={resume} onSaved={refresh} />
-    {resume.current_version.status !== "final" && <section className="panel final-actions"><div><h2>复核并定稿</h2><p>定稿后当前版本不可修改，并生成经过文本层和页面渲染检查的 PDF。</p></div><div><button className="secondary" onClick={() => review.mutate()} disabled={review.isPending}>{review.isPending ? "正在复核…" : "重新复核"}</button><button onClick={() => finalize.mutate(resume)} disabled={finalize.isPending || Boolean(resume.review?.error_count)}>{finalize.isPending ? "正在导出…" : "确认定稿并导出 PDF"}</button></div>{(review.error || finalize.error) && <p className="form-error">{review.error?.message ?? finalize.error?.message}</p>}</section>}
-    {resume.export && <section className="panel export-result"><div><p className="eyebrow">已验证 PDF</p><h2>可复用导出物</h2><p>{(resume.export.size_bytes / 1024).toFixed(1)} KB · {resume.export.page_count} 页 · 文本层 {resume.export.text_layer_ok ? "通过" : "失败"} · 渲染 {resume.export.render_ok ? "通过" : "失败"}</p><a className="download-button" href={resume.export.download_url}>下载 PDF</a></div><img src={resume.export.preview_url} alt={`${resume.name} PDF 第一页预览`} /></section>}
+  const docx = resume.docx_export ?? resume.exports.find(item => item.format === "docx");
+  const pdf = resume.export ?? resume.exports.find(item => item.format === "pdf");
+  return <><header className="page-header resume-detail-header"><div><p className="eyebrow">{resume.scope === "application" ? "岗位简历" : "简历库"}</p><h1>{resume.name}</h1><p>{resume.source_file_name ? `导入自 ${resume.source_file_name}` : "根据个人档案生成"}</p></div><div className="resume-detail-actions">{docx && <a className="download-button" href={docx.download_url}>下载 DOCX</a>}{pdf && <a className="download-button secondary" href={pdf.download_url}>下载 PDF</a>}</div></header>
+    <section className="resume-metadata" aria-label="简历信息"><span>v{resume.current_version.version_number}</span><span>{formatChinaTime(resume.current_version.created_at)}（北京时间）</span><span>{resume.current_version.blocks.length} 个部分</span>{resume.is_default && <span className="current-mark">默认简历</span>}</section>
+    <section className="resume-document" aria-label="简历正文">{resume.current_version.blocks.map(block => <section className="resume-document-section" key={block.id}><h2>{block.section}</h2><p>{block.text}</p></section>)}</section>
+    {pdf && <section className="resume-preview"><div className="resume-preview-heading"><div><p className="eyebrow">PDF 预览</p><h2>打印效果</h2></div><span>{pdf.page_count} 页</span></div><img src={pdf.preview_url} alt={`${resume.name} PDF 第一页预览`} /></section>}
     <details className="panel audit-details"><summary>版本历史（{resume.versions.length}）</summary>{resume.versions.map(version => <p className="history-row" key={version.id}>v{version.version_number} · {STATUS_LABELS[version.status] ?? version.status}<small>{formatChinaTime(version.created_at)}（北京时间） · {version.content_hash}</small></p>)}</details>
   </>;
 }
@@ -190,17 +229,4 @@ function MaterialEditor({ material, onSaved }: { material: Material; onSaved: ()
   const [values, setValues] = useState(() => Object.fromEntries(material.current_version.blocks.map((block) => [block.id, block.text])));
   const edit = useMutation({ mutationFn: () => editMaterial(material, material.current_version.blocks.map((block) => ({ id: block.id, text: values[block.id] ?? block.text }))), onSuccess: onSaved });
   return <section className="panel material-editor"><div className="panel-heading"><div><p className="eyebrow">材料正文</p><h2>{material.status === "final" ? "最终内容" : "编辑事实表达"}</h2></div><span>{material.current_version.blocks.length} 条</span></div>{material.current_version.blocks.map((block) => <article className="material-block" key={block.id}><strong>{block.section}</strong>{material.status === "final" ? <div className="readonly-material">{values[block.id] ?? block.text}</div> : <textarea aria-label={`${block.section}内容`} rows={3} value={values[block.id] ?? block.text} onChange={(event) => setValues((previous) => ({ ...previous, [block.id]: event.target.value }))} />}<details><summary>事实引用（{block.fact_snapshots.length}）</summary>{block.fact_snapshots.map((fact) => <blockquote key={fact.id}>{fact.value}<small>{fact.category} · {fact.field_key} · 事实版本 {fact.fact_version}</small></blockquote>)}</details></article>)}{material.status !== "final" && <button onClick={() => edit.mutate()} disabled={edit.isPending}>{edit.isPending ? "保存并审查中…" : "保存为新版本并重新审查"}</button>}{edit.error && <p className="form-error">{edit.error.message}</p>}</section>;
-}
-
-function ResumeEditor({ resume, onSaved }: { resume: ResumeDetail; onSaved: () => Promise<void> }) {
-  const [values, setValues] = useState(() => Object.fromEntries(resume.current_version.blocks.map(block => [block.id, block.text])));
-  const edit = useMutation({
-    mutationFn: () => editResume(
-      resume,
-      resume.current_version.blocks.map(block => ({ id: block.id, text: values[block.id] ?? block.text })),
-    ),
-    onSuccess: onSaved,
-  });
-  const final = resume.current_version.status === "final";
-  return <section className="panel material-editor"><div className="panel-heading"><div><p className="eyebrow">简历正文</p><h2>{final ? "已定稿内容" : "编辑当前版本"}</h2></div><span>{resume.current_version.blocks.length} 条</span></div>{resume.current_version.blocks.map(block => <article className="material-block" key={block.id}><strong>{block.section}</strong>{final ? <div className="readonly-material">{block.text}</div> : <textarea aria-label={`${block.section}内容`} rows={3} value={values[block.id] ?? block.text} onChange={event => setValues(previous => ({ ...previous, [block.id]: event.target.value }))} />}<details><summary>事实依据（{block.fact_snapshots.length}）</summary>{block.fact_snapshots.map(fact => <blockquote key={fact.id}>{fact.value}<small>{fact.category} · {fact.field_key} · 事实版本 {fact.fact_version}</small></blockquote>)}</details></article>)}{!final && <button onClick={() => edit.mutate()} disabled={edit.isPending}>{edit.isPending ? "保存并复核中…" : "保存为新版本并复核"}</button>}{edit.error && <p className="form-error">{edit.error.message}</p>}</section>;
 }

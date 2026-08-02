@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -902,30 +902,49 @@ describe("Career app shell", () => {
     expect(screen.getByText("重试次数")).toBeInTheDocument();
   });
 
-  it("renders final material with fact evidence and verified export", async () => {
+  it("renders a published resume with DOCX download and PDF preview", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({
-        id: "material-1", name: "基础简历", material_type: "resume", status: "final", version: 3,
+        id: "resume-1", name: "基础简历", series_type: "base", scope: "library",
+        application_id: null, application_status: null, parent_resume_id: null,
+        direction_label: null, source_file_name: null, material_count: 1,
+        is_default: true, default_version: 1,
+        latest_version: null, latest_finalized_version: null,
         job_post_id: "job", job_post_version_id: "job-version", job_title: "Python 后端工程师",
-        company: "示例科技", current_version_number: 2, created_at: "2026-07-23T00:00:00Z", updated_at: "2026-07-23T00:00:00Z",
+        company: "示例科技", created_at: "2026-07-23T00:00:00Z", updated_at: "2026-07-23T00:00:00Z",
         current_version: { id: "version", parent_version_id: "parent", version_number: 2, status: "final",
           title: "张三 · Python 后端工程师 · 定制简历", content_hash: "a".repeat(64), fact_set_hash: "b".repeat(64),
           created_at: "2026-07-23T00:00:00Z", finalized_at: "2026-07-23T00:00:00Z", rendered_text: "熟练使用 Python",
-          blocks: [{ id: "claim-1", section: "skill", text: "熟练使用 Python", fact_snapshots: [{ id: "snapshot", fact_id: "fact", fact_version: 2, category: "skill", field_key: "technical_skills", value: "熟练使用 Python" }] }] },
+          source_resume_version_id: null, version_scope: "base",
+          blocks: [{ id: "claim-1", section: "核心能力", text: "熟练使用 Python", fact_snapshots: [] }] },
         versions: [{ id: "version", parent_version_id: "parent", version_number: 2, status: "final", title: "定制简历",
-          content_hash: "a".repeat(64), fact_set_hash: "b".repeat(64), created_at: "2026-07-23T00:00:00Z", finalized_at: "2026-07-23T00:00:00Z" }],
+          content_hash: "a".repeat(64), fact_set_hash: "b".repeat(64), created_at: "2026-07-23T00:00:00Z",
+          finalized_at: "2026-07-23T00:00:00Z", source_resume_version_id: null, version_scope: "base" }],
         review: { id: "review", status: "passed", schema_version: "material_review.v1", error_count: 0, warning_count: 0, created_at: "2026-07-23T00:00:00Z", findings: [] },
         export: { id: "export", format: "pdf", sha256: "c".repeat(64), size_bytes: 12000, page_count: 1,
           text_layer_ok: true, render_ok: true, extracted_text_hash: "d".repeat(64), created_at: "2026-07-23T00:00:00Z",
           download_url: "/api/v1/material-exports/export/download", preview_url: "/api/v1/material-exports/export/preview" },
+        docx_export: { id: "docx-export", format: "docx", sha256: "e".repeat(64), size_bytes: 8000, page_count: 0,
+          text_layer_ok: true, render_ok: true, extracted_text_hash: "f".repeat(64), created_at: "2026-07-23T00:00:00Z",
+          download_url: "/api/v1/material-exports/docx-export/download", preview_url: "" },
+        exports: [
+          { id: "docx-export", format: "docx", sha256: "e".repeat(64), size_bytes: 8000, page_count: 0,
+            text_layer_ok: true, render_ok: true, extracted_text_hash: "f".repeat(64), created_at: "2026-07-23T00:00:00Z",
+            download_url: "/api/v1/material-exports/docx-export/download", preview_url: "" },
+          { id: "export", format: "pdf", sha256: "c".repeat(64), size_bytes: 12000, page_count: 1,
+            text_layer_ok: true, render_ok: true, extracted_text_hash: "d".repeat(64), created_at: "2026-07-23T00:00:00Z",
+            download_url: "/api/v1/material-exports/export/download", preview_url: "/api/v1/material-exports/export/preview" },
+        ],
       }),
     }));
-    renderApp("/materials/material-1");
-    expect(await screen.findByRole("heading", { name: "张三 · Python 后端工程师 · 定制简历" })).toBeInTheDocument();
-    expect(screen.getByText("熟练使用 Python", { selector: "blockquote" })).toBeInTheDocument();
+    renderApp("/resumes/resume-1");
+    expect(await screen.findByRole("heading", { name: "基础简历" })).toBeInTheDocument();
+    expect(screen.getByText("熟练使用 Python")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "下载 DOCX" })).toHaveAttribute("href", "/api/v1/material-exports/docx-export/download");
     expect(screen.getByRole("link", { name: "下载 PDF" })).toHaveAttribute("href", "/api/v1/material-exports/export/download");
-    expect(screen.getByAltText("最终 PDF 第一页渲染预览")).toBeInTheDocument();
+    expect(screen.getByAltText("基础简历 PDF 第一页预览")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /确认|定稿|审查/ })).not.toBeInTheDocument();
   });
 
   it("renders an immutable application timeline and material snapshot", async () => {
@@ -963,13 +982,13 @@ describe("Career app shell", () => {
     expect(screen.getByText("Python 定制简历 · 简历")).toBeInTheDocument();
   });
 
-  it("guides users to finalize and bind a resume before submission", async () => {
+  it("offers resume selection and job-specific generation without submitting", async () => {
     const fetchMock = vi.fn().mockImplementation((input: string) => Promise.resolve({
       ok: true,
       json: async () => String(input).includes("/application-review-tasks")
         ? { total: 0, items: [] }
-        : input === "/api/v1/resumes/default"
-          ? null
+        : input === "/api/v1/resumes"
+          ? { total: 0, items: [] }
           : ({
         id: "application-ready", job_post_id: "job-ready", job_post_version_id: "job-version",
         job_title: "Python 后端工程师", company: "示例科技", job_content_hash: "a".repeat(64),
@@ -982,8 +1001,11 @@ describe("Career app shell", () => {
     vi.stubGlobal("fetch", fetchMock);
     renderApp("/applications/application-ready");
 
-    expect(await screen.findByText("没有可绑定的定稿版本")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "准备申请材料" })).toHaveAttribute("href", "/job-posts/job-ready/materials");
+    expect(await screen.findByRole("heading", { name: "从现有简历选择" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "生成岗位专属简历" })).toBeInTheDocument();
+    expect(screen.getByText("生成后绑定到本申请，不会自动投递。")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "绑定简历" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "生成并绑定" })).toBeEnabled();
     expect(screen.queryByRole("button", { name: "确认投递并锁定此版本" })).not.toBeInTheDocument();
     expect(fetchMock.mock.calls.some(([input]) => String(input).includes("/submit"))).toBe(false);
   });
@@ -1061,7 +1083,7 @@ describe("Career app shell", () => {
     vi.stubGlobal("fetch", fetchMock);
     renderApp("/materials");
 
-    fireEvent.click(await screen.findByRole("button", { name: "设为默认" }));
+    fireEvent.click(await screen.findByRole("button", { name: "将通用后端简历设为默认简历" }));
     await waitFor(() => {
       const request = fetchMock.mock.calls.find(
         ([input, init]) => input === "/api/v1/resumes/default" && init?.method === "PUT",
@@ -1341,90 +1363,153 @@ describe("Career app shell", () => {
     })));
     renderApp("/materials");
     expect(await screen.findByRole("heading", { name: "我的简历" })).toBeInTheDocument();
-    expect(screen.getByLabelText("简历名称")).toBeInTheDocument();
+    expect(screen.getAllByLabelText("简历名称")).toHaveLength(2);
     expect(screen.getByLabelText("生成要求")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "生成简历候选" })).toBeEnabled();
-    expect(screen.getByRole("link", { name: "前往目标岗位定制" })).toHaveAttribute("href", "/job-posts");
+    expect(screen.getByRole("button", { name: "生成并加入简历库" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "导入到简历库" })).toBeEnabled();
+    expect(screen.getByLabelText("选择文件")).toHaveAttribute(
+      "accept",
+      ".docx,.pdf,.txt,.md,.markdown",
+    );
+    expect(screen.getAllByRole("link", { name: "目标岗位" }).some(link => link.getAttribute("href") === "/job-posts")).toBe(true);
     expect(screen.queryByText("请先选择岗位。")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("选择岗位")).not.toBeInTheDocument();
   });
 
-  it("sends the standalone resume name and prompt to the Agent proposal endpoint", async () => {
-    const proposal = {
-      id: "proposal-1", resume_name: "后端开发通用简历", user_prompt: "突出 Python 后端能力",
-      fact_set_hash: "a".repeat(64), schema_version: "resume_draft.v2",
-      content: { schemaVersion: "resume_draft.v2", title: "后端开发通用简历",
-        rationale: "按用户要求整理", blocks: [{ blockId: "summary", section: "核心能力",
-          text: "具备 Python 后端项目经验。", factIds: ["fact-1"], requirementIds: [] }] },
-      status: "proposed", version: 1, drafter_run_id: "run-1", review_task_id: "review-1",
-      resume_id: null, resume_version_id: null, resolution_reason: null,
-      created_at: "2026-07-31T00:00:00Z", resolved_at: null,
-    };
+  it("generates a reusable resume directly from its name and prompt", async () => {
     const fetchMock = vi.fn().mockImplementation((input: string, init?: RequestInit) => Promise.resolve({
       ok: true,
-      json: async () => input === "/api/v1/resumes/default"
-        ? null
-        : input === "/api/v1/resumes/agent-proposals" && init?.method === "POST"
-          ? proposal
-          : input === "/api/v1/resumes/agent-proposals"
-            ? { total: 0, items: [] }
+      status: 200,
+      headers: new Headers(),
+      json: async () => input === "/api/v1/system/session"
+        ? { csrf_token: "test-token" }
+        : input === "/api/v1/resumes/generate" && init?.method === "POST"
+          ? { id: "resume-1", current_version: { id: "resume-version-1" } }
+          : input === "/api/v1/resumes/default"
+            ? null
             : { total: 0, items: [] },
     }));
     vi.stubGlobal("fetch", fetchMock);
     renderApp("/materials");
 
-    fireEvent.change(await screen.findByLabelText("简历名称"), { target: { value: "后端开发通用简历" } });
-    fireEvent.change(screen.getByLabelText("生成要求"), { target: { value: "突出 Python 后端能力" } });
-    fireEvent.click(screen.getByRole("button", { name: "生成简历候选" }));
+    const generationForm = (await screen.findByRole("button", { name: "生成并加入简历库" })).closest("form");
+    expect(generationForm).not.toBeNull();
+    fireEvent.change(within(generationForm!).getByLabelText("简历名称"), { target: { value: "后端开发通用简历" } });
+    fireEvent.change(within(generationForm!).getByLabelText("生成要求"), { target: { value: "突出 Python 后端能力" } });
+    fireEvent.click(within(generationForm!).getByRole("button", { name: "生成并加入简历库" }));
 
     await waitFor(() => {
       const request = fetchMock.mock.calls.find(
-        ([input, init]) => input === "/api/v1/resumes/agent-proposals" && init?.method === "POST",
+        ([input, init]) => input === "/api/v1/resumes/generate" && init?.method === "POST",
       );
       expect(JSON.parse(String(request?.[1]?.body))).toEqual({
         name: "后端开发通用简历",
         prompt: "突出 Python 后端能力",
       });
     });
-    expect(await screen.findByRole("status")).toHaveTextContent("确认前不会创建正式简历");
+    expect(fetchMock.mock.calls.some(([input]) => String(input).includes("agent-proposals"))).toBe(false);
+    expect(screen.queryByRole("button", { name: /确认并创建简历/ })).not.toBeInTheDocument();
   });
 
-  it("confirms a standalone resume candidate before creating the formal resume", async () => {
-    const proposal = {
-      id: "proposal-1", resume_name: "后端开发通用简历", user_prompt: "突出 Python 后端能力",
-      fact_set_hash: "a".repeat(64), schema_version: "resume_draft.v2",
-      content: { schemaVersion: "resume_draft.v2", title: "后端开发通用简历",
-        rationale: "按用户要求整理", blocks: [{ blockId: "summary", section: "核心能力",
-          text: "具备 Python 后端项目经验。", factIds: ["fact-1"], requirementIds: [] }] },
-      status: "proposed", version: 1, drafter_run_id: "run-1", review_task_id: "review-1",
-      resume_id: null, resume_version_id: null, resolution_reason: null,
-      created_at: "2026-07-31T00:00:00Z", resolved_at: null,
+  it("archives a reusable resume when the API returns 204", async () => {
+    const resume = {
+      id: "resume-1", name: "后端开发通用简历", series_type: "base",
+      parent_resume_id: null, direction_label: null, scope: "library",
+      application_id: null, application_status: null, job_title: null, company: null,
+      source_file_name: null, material_count: 1, latest_version: null,
+      latest_finalized_version: null, is_default: false, default_version: null,
+      docx_export: null, created_at: "2026-07-31T00:00:00Z", updated_at: "2026-07-31T00:00:00Z",
     };
+    const responseJson = vi.fn(async () => {
+      throw new Error("204 response body must not be parsed");
+    });
     const fetchMock = vi.fn().mockImplementation((input: string, init?: RequestInit) => Promise.resolve({
       ok: true,
-      json: async () => input === "/api/v1/resumes/default"
-        ? null
-        : input === "/api/v1/resumes/agent-proposals/proposal-1/resolve"
-          ? { ...proposal, status: "confirmed", version: 2, resume_id: "resume-1",
-            resume_version_id: "resume-version-1", resolved_at: "2026-07-31T00:05:00Z" }
-          : input === "/api/v1/resumes/agent-proposals"
-            ? { total: 1, items: [proposal] }
-            : { total: 0, items: [] },
+      status: input === "/api/v1/resumes/resume-1" && init?.method === "DELETE" ? 204 : 200,
+      headers: new Headers(),
+      json: input === "/api/v1/resumes/resume-1" && init?.method === "DELETE"
+        ? responseJson
+        : async () => input === "/api/v1/system/session"
+          ? { csrf_token: "test-token" }
+          : input === "/api/v1/resumes/default"
+            ? null
+            : input === "/api/v1/resumes"
+              ? { total: 1, items: [resume] }
+              : { total: 0, items: [] },
     }));
+    vi.spyOn(window, "confirm").mockReturnValue(true);
     vi.stubGlobal("fetch", fetchMock);
     renderApp("/materials");
 
-    fireEvent.click(await screen.findByRole("button", { name: "确认并创建简历" }));
+    fireEvent.click(await screen.findByRole("button", { name: "归档" }));
     await waitFor(() => {
       const request = fetchMock.mock.calls.find(
-        ([input, init]) => input === "/api/v1/resumes/agent-proposals/proposal-1/resolve"
+        ([input, init]) => input === "/api/v1/resumes/resume-1" && init?.method === "DELETE",
+      );
+      expect(request).toBeDefined();
+    });
+    expect(responseJson).not.toHaveBeenCalled();
+    expect(screen.queryByText("204 response body must not be parsed")).not.toBeInTheDocument();
+  });
+
+  it("generates and binds an exact job resume version without submitting", async () => {
+    const application = {
+      id: "application-ready", job_post_id: "job-ready", job_post_version_id: "job-version",
+      job_title: "Python 后端工程师", company: "示例科技", job_content_hash: "a".repeat(64),
+      current_status: "preparing_materials", version: 3, material_count: 0,
+      created_at: "2026-08-02T00:00:00Z", updated_at: "2026-08-02T00:00:00Z", archived_at: null,
+      events: [], material_snapshots: [], proposals: [], mail_evidence: [],
+      resume_bindings: [], active_resume_binding: null, available_final_materials: [],
+    };
+    const fetchMock = vi.fn().mockImplementation((input: string, init?: RequestInit) => Promise.resolve({
+      ok: true,
+      status: 200,
+      headers: new Headers(),
+      json: async () => input === "/api/v1/system/session"
+        ? { csrf_token: "test-token" }
+        : input === "/api/v1/resumes"
+          ? { total: 0, items: [] }
+          : input === "/api/v1/application-review-tasks"
+            ? { total: 0, items: [] }
+            : input === "/api/v1/materials/generate" && init?.method === "POST"
+              ? { current_version: { id: "job-resume-version-1" } }
+              : input === "/api/v1/applications/application-ready/resume-bindings" && init?.method === "POST"
+                ? { ...application, version: 4 }
+                : application,
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    renderApp("/applications/application-ready");
+
+    const generateButton = await screen.findByRole("button", { name: "生成并绑定" });
+    const form = generateButton.closest("form");
+    expect(form).not.toBeNull();
+    fireEvent.change(within(form!).getByLabelText("简历名称"), { target: { value: "岗位专属简历" } });
+    fireEvent.change(within(form!).getByLabelText("生成要求"), { target: { value: "突出接口性能优化经验" } });
+    fireEvent.click(generateButton);
+
+    await waitFor(() => {
+      const generationRequest = fetchMock.mock.calls.find(
+        ([input, init]) => input === "/api/v1/materials/generate" && init?.method === "POST",
+      );
+      expect(JSON.parse(String(generationRequest?.[1]?.body))).toEqual({
+        application_id: "application-ready",
+        job_post_id: "job-ready",
+        source_resume_version_id: null,
+        resume_name: "岗位专属简历",
+        prompt: "突出接口性能优化经验",
+      });
+      const bindingRequest = fetchMock.mock.calls.find(
+        ([input, init]) => input === "/api/v1/applications/application-ready/resume-bindings"
           && init?.method === "POST",
       );
-      expect(JSON.parse(String(request?.[1]?.body))).toMatchObject({
-        expected_version: 1,
-        resolution: "confirmed",
+      expect(JSON.parse(String(bindingRequest?.[1]?.body))).toMatchObject({
+        expected_version: 3,
+        resume_version_id: "job-resume-version-1",
+        use_default: false,
+        source: "generated",
       });
     });
+    expect(fetchMock.mock.calls.some(([input]) => String(input).includes("/submit"))).toBe(false);
   });
 
   it("redirects legacy job material links into the fixed job context", async () => {

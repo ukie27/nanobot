@@ -1157,8 +1157,19 @@ class ResumeModel(Base):
         ForeignKey("resumes.id", ondelete="RESTRICT")
     )
     direction_label: Mapped[str | None] = mapped_column(String(120))
+    scope: Mapped[str] = mapped_column(String(24), nullable=False, default="library")
+    application_id: Mapped[str | None] = mapped_column(
+        ForeignKey("applications.id", ondelete="RESTRICT")
+    )
+    source_file_name: Mapped[str | None] = mapped_column(String(255))
+    retired_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    __table_args__ = (
+        CheckConstraint("scope IN ('library','application')", name="ck_resume_scope"),
+        Index("ix_resumes_scope_active", "scope", "retired_at", "updated_at"),
+        Index("ix_resumes_application", "application_id", "retired_at"),
+    )
 
 
 class ResumeDefaultModel(Base):
@@ -1413,8 +1424,8 @@ class ApplicationMaterialSnapshotModel(Base):
     application_id: Mapped[str] = mapped_column(
         ForeignKey("applications.id", ondelete="CASCADE"), nullable=False
     )
-    material_draft_id: Mapped[str] = mapped_column(
-        ForeignKey("material_drafts.id", ondelete="RESTRICT"), nullable=False
+    material_draft_id: Mapped[str | None] = mapped_column(
+        ForeignKey("material_drafts.id", ondelete="RESTRICT")
     )
     resume_version_id: Mapped[str] = mapped_column(
         ForeignKey("resume_versions.id", ondelete="RESTRICT"), nullable=False
@@ -1431,7 +1442,9 @@ class ApplicationMaterialSnapshotModel(Base):
     export_relative_path: Mapped[str | None] = mapped_column(String(500))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     __table_args__ = (
-        UniqueConstraint("application_id", "material_draft_id", name="uq_application_material"),
+        UniqueConstraint(
+            "application_id", "resume_version_id", name="uq_application_resume_snapshot"
+        ),
     )
 
 

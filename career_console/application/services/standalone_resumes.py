@@ -76,16 +76,16 @@ class StandaloneResumeApplicationService:
 
     @staticmethod
     def _validate_draft(draft: Any, context: dict[str, Any]) -> None:
-        facts = {item["id"]: item for item in context["confirmedFacts"]}
+        facts = {item["id"]: item for item in context["profileFacts"]}
         for block in draft.blocks:
             if not block.fact_ids or not set(block.fact_ids) <= set(facts):
                 raise CareerDomainError(
-                    "简历候选引用了不存在或未确认的职业事实。",
+                    "简历引用了当前个人档案中不存在的事实。",
                     code="standalone_resume_fact_invalid",
                 )
             if block.requirement_ids:
                 raise CareerDomainError(
-                    "通用简历候选不能引用岗位要求。",
+                    "通用简历不能引用岗位要求。",
                     code="standalone_resume_requirement_invalid",
                 )
         snapshots = [
@@ -99,7 +99,7 @@ class StandaloneResumeApplicationService:
         findings = review_material(blocks, snapshots)
         if any(item.severity == "error" for item in findings):
             code = next(item.code for item in findings if item.severity == "error")
-            raise CareerDomainError("简历候选包含无事实支持的陈述。", code=code)
+            raise CareerDomainError("简历包含无事实支持的陈述。", code=code)
 
     def _audit(self, started_at: datetime, started: float) -> dict[str, Any]:
         provider = getattr(self.drafter, "provider", None)

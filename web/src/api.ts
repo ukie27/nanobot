@@ -434,12 +434,16 @@ export interface MaterialExport {
 export interface Material extends MaterialSummary {
   current_version: MaterialVersion & { rendered_text: string; blocks: MaterialBlock[] };
   versions: MaterialVersion[]; review: MaterialReview | null; export: MaterialExport | null;
+  exports: MaterialExport[];
 }
 export interface MaterialList { items: MaterialSummary[]; total: number }
 export interface ResumeSeries {
   id: string; name: string; series_type: "base" | "direction"; parent_resume_id: string | null;
-  direction_label: string | null; material_count: number; latest_version: MaterialVersion | null;
+  direction_label: string | null; scope: "library" | "application"; application_id: string | null;
+  application_status: ApplicationStatus | null; job_title: string | null; company: string | null;
+  source_file_name: string | null; material_count: number; latest_version: MaterialVersion | null;
   latest_finalized_version: MaterialVersion | null; is_default: boolean; default_version: number | null;
+  docx_export: MaterialExport | null;
   created_at: string; updated_at: string;
 }
 export interface ResumeSeriesList { items: ResumeSeries[]; total: number }
@@ -448,6 +452,7 @@ export interface ResumeDetail extends ResumeSeries {
   versions: MaterialVersion[];
   review: MaterialReview | null;
   export: MaterialExport | null;
+  exports: MaterialExport[];
 }
 export interface StandaloneResumeProposal {
   id: string;
@@ -517,7 +522,7 @@ export interface ApplicationEvent {
   supersedes_event_id: string | null; superseded: boolean; created_at: string;
 }
 export interface ApplicationMaterialSnapshot {
-  id: string; material_draft_id: string; resume_version_id: string; material_type: string; title: string;
+  id: string; material_draft_id: string | null; resume_version_id: string; material_type: string; title: string;
   rendered_text: string; content_hash: string; fact_set_hash: string; export_id: string | null;
   export_sha256: string | null; created_at: string;
 }
@@ -530,7 +535,8 @@ export interface ApplicationResumeBinding {
 }
 export interface AvailableFinalMaterial {
   id: string; resume_id: string; resume_version_id: string; version_number: number;
-  name: string; title: string; material_type: string; finalized_at: string;
+  name: string; title: string; material_type: string; scope: "library" | "application";
+  application_id: string | null; finalized_at: string;
 }
 export interface ApplicationProposal {
   id: string; application_id: string; proposed_status: ApplicationStatus; occurred_at: string; note: string;
@@ -794,6 +800,9 @@ async function parseResponse<T>(response: Response): Promise<T> {
       problem.code,
     );
   }
+  if (response.status === 204) return undefined as T;
+  const contentLength = response.headers?.get?.("content-length");
+  if (contentLength === "0") return undefined as T;
   return (await response.json()) as T;
 }
 
@@ -1081,7 +1090,23 @@ export const resolveResumeDirections = (proposal: ResumeDirectionProposal, resol
   });
 export const getMaterials = () => getJson<MaterialList>("/api/v1/materials");
 export const getResumeSeries = () => getJson<ResumeSeriesList>("/api/v1/resumes");
+export const getApplicationResumes = () => getJson<ResumeSeriesList>("/api/v1/resumes/application");
 export const getResume = (id: string) => getJson<ResumeDetail>(`/api/v1/resumes/${id}`);
+export const generateResume = (body: { name: string; prompt: string }) =>
+  sendJson<ResumeDetail>("/api/v1/resumes/generate", body);
+export async function importResume(name: string, file: File): Promise<ResumeDetail> {
+  const form = new FormData();
+  form.append("name", name);
+  form.append("file", file);
+  return sendForm<ResumeDetail>("/api/v1/resumes/import", form);
+}
+export const deleteResume = (resumeId: string) =>
+  deleteJson<void>(`/api/v1/resumes/${encodeURIComponent(resumeId)}`);
+export const saveApplicationResumeToLibrary = (resumeId: string, name: string) =>
+  sendJson<ResumeDetail>(
+    `/api/v1/resumes/${encodeURIComponent(resumeId)}/save-to-library`,
+    { name },
+  );
 export const getStandaloneResumeProposals = () =>
   getJson<StandaloneResumeProposalList>("/api/v1/resumes/agent-proposals");
 export const generateStandaloneResumeProposal = (body: { name: string; prompt: string }) =>
@@ -1126,6 +1151,13 @@ export const getResumeVersionDiff = (fromVersionId: string, toVersionId: string)
 export const getMaterial = (id: string) => getJson<Material>(`/api/v1/materials/${id}`);
 export const generateMaterial = (body: { job_post_id: string; material_type: MaterialType; name: string; resume_id?: string }) =>
   sendJson<Material>("/api/v1/materials", body);
+export const generateApplicationResume = (body: {
+  application_id: string;
+  job_post_id: string;
+  source_resume_version_id: string | null;
+  resume_name: string;
+  prompt: string;
+}) => sendJson<Material>("/api/v1/materials/generate", body);
 export const getMaterialAgentProposals = (jobId: string) =>
   getJson<MaterialAgentProposalList>(`/api/v1/materials/agent-proposals?job_post_id=${encodeURIComponent(jobId)}`);
 export const generateMaterialAgentProposal = (body: { job_post_id: string; resume_name: string; resume_id?: string }) =>
@@ -1145,12 +1177,17 @@ export const getApplication = (id: string) => getJson<Application>(`/api/v1/appl
 export const createApplication = (job_post_id: string) => sendJson<Application>("/api/v1/applications", { job_post_id });
 export const bindApplicationResume = (
   application: Application,
-  selection: { resume_version_id?: string; use_default: boolean; reason: string },
+  selection: {
+    resume_version_id?: string;
+    use_default: boolean;
+    reason: string;
+    source?: "user" | "generated" | "mail_default" | "migration";
+  },
 ) => sendJson<Application>(`/api/v1/applications/${application.id}/resume-bindings`, {
   expected_version: application.version,
   command_id: globalThis.crypto?.randomUUID?.() ?? `bind-${Date.now()}`,
-  source: "user",
   ...selection,
+  source: selection.source ?? "user",
 });
 export const submitApplication = (application: Application, resume_version_id: string, occurred_at: string, note: string) =>
   sendJson<Application>(`/api/v1/applications/${application.id}/submit`, {

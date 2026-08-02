@@ -24,6 +24,7 @@ from career_console.domain.materials import (
     review_material,
 )
 from career_console.infrastructure.database.models import (
+    ApplicationModel,
     CandidateFactModel,
     CompanyModel,
     FactReferenceModel,
@@ -46,7 +47,7 @@ from career_console.infrastructure.database.profile_gateway import (
     EntityNotFoundError,
     VersionConflictError,
 )
-from career_console.infrastructure.materials import VerifiedPdfExporter
+from career_console.infrastructure.materials import StructuredDocxExporter, VerifiedPdfExporter
 
 _SECTION_LABELS = {
     "basic": "基本信息",
@@ -59,6 +60,7 @@ _SECTION_LABELS = {
     "certificate": "证书",
     "preference": "求职偏好",
     "constraint": "限制条件",
+    "imported": "简历内容",
 }
 
 
@@ -69,10 +71,12 @@ class SqlAlchemyMaterialGateway:
         *,
         exports_dir: Path,
         pdf_exporter: VerifiedPdfExporter,
+        docx_exporter: StructuredDocxExporter,
     ) -> None:
         self._session_factory = session_factory
         self._exports_dir = exports_dir
         self._pdf_exporter = pdf_exporter
+        self._docx_exporter = docx_exporter
 
     def create_material(
         self,
@@ -199,6 +203,10 @@ class SqlAlchemyMaterialGateway:
             rows = session.execute(
                 select(ResumeModel, func.count(MaterialDraftModel.id))
                 .outerjoin(MaterialDraftModel, MaterialDraftModel.resume_id == ResumeModel.id)
+                .where(
+                    ResumeModel.scope == "library",
+                    ResumeModel.retired_at.is_(None),
+                )
                 .group_by(ResumeModel.id)
                 .order_by(ResumeModel.updated_at.desc())
             ).all()
@@ -209,6 +217,9 @@ class SqlAlchemyMaterialGateway:
                     "series_type": resume.series_type,
                     "parent_resume_id": resume.parent_resume_id,
                     "direction_label": resume.direction_label,
+                    "scope": resume.scope,
+                    "application_id": resume.application_id,
+                    "source_file_name": resume.source_file_name,
                     "material_count": material_count,
                     "latest_version": self._resume_series_version_summary(session, resume.id),
                     "latest_finalized_version": self._resume_series_version_summary(
@@ -220,11 +231,182 @@ class SqlAlchemyMaterialGateway:
                         if default is not None and default.resume_id == resume.id
                         else None
                     ),
+                    "docx_export": self._latest_docx_export_view(
+                        session, resume.id
+                    ),
                     "created_at": self._utc(resume.created_at),
                     "updated_at": self._utc(resume.updated_at),
                 }
                 for resume, material_count in rows
             ]
+
+    def list_application_resumes(self) -> list[dict[str, Any]]:
+        with self._session_factory() as session:
+            rows = session.execute(
+                select(ResumeModel, ApplicationModel)
+                .join(ApplicationModel, ApplicationModel.id == ResumeModel.application_id)
+                .where(
+                    ResumeModel.scope == "application",
+                    ResumeModel.retired_at.is_(None),
+                )
+                .order_by(ResumeModel.updated_at.desc())
+            ).all()
+            items = []
+            for resume, application in rows:
+                item = self._resume_detail_view(session, resume)
+                item["application_status"] = application.current_status
+                item["job_title"] = application.job_title_snapshot
+                item["company"] = application.company_name_snapshot
+                items.append(item)
+            return items
+
+    def import_resume(
+        self, *, name: str, file_name: str, text: str
+    ) -> dict[str, Any]:
+        normalized_name = name.strip()
+        if not normalized_name:
+            raise CareerDomainError("请填写简历名称。", code="empty_resume_name")
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        if not lines:
+            raise CareerDomainError("简历文件没有可用内容。", code="empty_document")
+        now = datetime.now(UTC)
+        with self._session_factory() as session:
+            resume = ResumeModel(
+                id=str(uuid4()),
+                name=normalized_name[:300],
+                series_type="base",
+                parent_resume_id=None,
+                direction_label=None,
+                scope="library",
+                application_id=None,
+                source_file_name=file_name[:255],
+                retired_at=None,
+                created_at=now,
+                updated_at=now,
+            )
+            session.add(resume)
+            session.flush()
+            payload = [
+                {
+                    "id": f"import-{index}",
+                    "section": "imported",
+                    "text": line,
+                    "fact_snapshot_ids": [],
+                }
+                for index, line in enumerate(lines, start=1)
+            ]
+            content_json = json.dumps(payload, ensure_ascii=False)
+            version = ResumeVersionModel(
+                id=str(uuid4()),
+                resume_id=resume.id,
+                material_draft_id=None,
+                parent_version_id=None,
+                source_resume_version_id=None,
+                version_scope="base",
+                version_number=1,
+                status=VersionStatus.FINAL.value,
+                title=normalized_name[:300],
+                content_json=content_json,
+                rendered_text="\n".join(lines),
+                content_hash=hashlib.sha256(content_json.encode("utf-8")).hexdigest(),
+                fact_set_hash="user-authored-import",
+                created_at=now,
+                finalized_at=now,
+            )
+            session.add(version)
+            session.flush()
+            written = self._write_exports(
+                session,
+                version=version,
+                title=version.title,
+                subtitle="用户导入简历",
+                grouped={"imported": lines},
+                file_stem=f"resume-{resume.id}-v1",
+                now=now,
+            )
+            try:
+                session.commit()
+            except Exception:
+                self._remove_written_exports(written)
+                raise
+            return self._resume_detail_view(session, resume)
+
+    def retire_resume(self, resume_id: str) -> None:
+        now = datetime.now(UTC)
+        with self._session_factory() as session:
+            resume = session.get(ResumeModel, resume_id)
+            if resume is None or resume.scope != "library":
+                raise EntityNotFoundError("Resume series was not found.")
+            if resume.retired_at is not None:
+                return
+            resume.retired_at = now
+            resume.updated_at = now
+            default = session.scalar(
+                select(ResumeDefaultModel).where(ResumeDefaultModel.resume_id == resume.id)
+            )
+            if default is not None:
+                session.delete(default)
+            session.commit()
+
+    def save_application_resume_to_library(
+        self, resume_id: str, *, name: str
+    ) -> dict[str, Any]:
+        normalized_name = name.strip()
+        if not normalized_name:
+            raise CareerDomainError("请填写简历名称。", code="empty_resume_name")
+        now = datetime.now(UTC)
+        with self._session_factory() as session:
+            source_resume = session.get(ResumeModel, resume_id)
+            if source_resume is None or source_resume.scope != "application":
+                raise EntityNotFoundError("岗位简历不存在。")
+            source = self._latest_resume_series_version(session, source_resume.id)
+            if source is None or source.status != VersionStatus.FINAL.value:
+                raise CareerDomainError(
+                    "岗位简历尚未生成可下载版本。", code="application_resume_not_final"
+                )
+            resume = ResumeModel(
+                id=str(uuid4()),
+                name=normalized_name[:300],
+                series_type="base",
+                parent_resume_id=None,
+                direction_label=None,
+                scope="library",
+                application_id=None,
+                source_file_name=None,
+                retired_at=None,
+                created_at=now,
+                updated_at=now,
+            )
+            session.add(resume)
+            session.flush()
+            version = self._clone_standalone_version(
+                session,
+                source=source,
+                lineage_source=source,
+                resume=resume,
+                scope="base",
+                now=now,
+            )
+            version.status = VersionStatus.FINAL.value
+            version.finalized_at = now
+            grouped: dict[str, list[str]] = defaultdict(list)
+            for block in self._blocks(version):
+                grouped[block.section].append(block.text)
+            written = self._write_exports(
+                session,
+                version=version,
+                title=version.title,
+                subtitle=f"保存自岗位简历 · {source_resume.name}",
+                grouped=grouped,
+                file_stem=f"resume-{resume.id}-v1",
+                now=now,
+            )
+            try:
+                session.commit()
+            except Exception:
+                self._remove_written_exports(written)
+                raise
+            return self._resume_detail_view(session, resume)
 
     def get_resume(self, resume_id: str) -> dict[str, Any]:
         with self._session_factory() as session:
@@ -344,47 +526,14 @@ class SqlAlchemyMaterialGateway:
             grouped: dict[str, list[str]] = defaultdict(list)
             for block in blocks:
                 grouped[block.section].append(block.text)
-            result = self._pdf_exporter.generate(
+            written = self._write_exports(
+                session,
+                version=version,
                 title=version.title,
                 subtitle=f"可复用简历 · {resume.name}",
-                sections=[
-                    (_SECTION_LABELS.get(section, section), lines)
-                    for section, lines in grouped.items()
-                ],
-            )
-            export_id = str(uuid4())
-            pdf_name = (
-                f"resume-{resume.id}-v{version.version_number}-"
-                f"{result.sha256[:12]}.pdf"
-            )
-            preview_name = (
-                f"resume-{resume.id}-v{version.version_number}-"
-                f"{result.sha256[:12]}.png"
-            )
-            pdf_path = self._exports_dir / pdf_name
-            preview_path = self._exports_dir / preview_name
-            try:
-                self._atomic_write(pdf_path, result.pdf_bytes)
-                self._atomic_write(preview_path, result.preview_png)
-            except Exception:
-                pdf_path.unlink(missing_ok=True)
-                preview_path.unlink(missing_ok=True)
-                raise
-            session.add(
-                MaterialExportModel(
-                    id=export_id,
-                    resume_version_id=version.id,
-                    format="pdf",
-                    relative_path=pdf_name,
-                    preview_relative_path=preview_name,
-                    sha256=result.sha256,
-                    size_bytes=result.size_bytes,
-                    page_count=result.page_count,
-                    text_layer_ok=int(result.text_layer_ok),
-                    render_ok=int(result.render_ok),
-                    extracted_text_hash=result.extracted_text_hash,
-                    created_at=now,
-                )
+                grouped=grouped,
+                file_stem=f"resume-{resume.id}-v{version.version_number}",
+                now=now,
             )
             version.status = VersionStatus.FINAL.value
             version.finalized_at = now
@@ -392,8 +541,7 @@ class SqlAlchemyMaterialGateway:
             try:
                 session.commit()
             except Exception:
-                pdf_path.unlink(missing_ok=True)
-                preview_path.unlink(missing_ok=True)
+                self._remove_written_exports(written)
                 raise
             return self._resume_detail_view(session, resume)
 
@@ -457,6 +605,10 @@ class SqlAlchemyMaterialGateway:
                 series_type=series_type,
                 parent_resume_id=parent.id if parent else None,
                 direction_label=(direction_label or "").strip()[:120] or None,
+                scope="library",
+                application_id=None,
+                source_file_name=None,
+                retired_at=None,
                 created_at=now,
                 updated_at=now,
             )
@@ -628,41 +780,15 @@ class SqlAlchemyMaterialGateway:
             grouped: dict[str, list[str]] = defaultdict(list)
             for block in blocks:
                 grouped[block.section].append(block.text)
-            result = self._pdf_exporter.generate(
+            written = self._write_exports(
+                session,
+                version=version,
                 title=version.title,
                 subtitle=f"目标岗位：{draft.company_name_snapshot} · {draft.job_title_snapshot}",
-                sections=[
-                    (_SECTION_LABELS.get(section, section), lines)
-                    for section, lines in grouped.items()
-                ],
+                grouped=grouped,
+                file_stem=f"{draft.id}-v{version.version_number}",
+                now=now,
             )
-            export_id = str(uuid4())
-            pdf_name = f"{draft.id}-v{version.version_number}-{result.sha256[:12]}.pdf"
-            preview_name = f"{draft.id}-v{version.version_number}-{result.sha256[:12]}.png"
-            pdf_path = self._exports_dir / pdf_name
-            preview_path = self._exports_dir / preview_name
-            try:
-                self._atomic_write(pdf_path, result.pdf_bytes)
-                self._atomic_write(preview_path, result.preview_png)
-            except Exception:
-                pdf_path.unlink(missing_ok=True)
-                preview_path.unlink(missing_ok=True)
-                raise
-            export = MaterialExportModel(
-                id=export_id,
-                resume_version_id=version.id,
-                format="pdf",
-                relative_path=pdf_name,
-                preview_relative_path=preview_name,
-                sha256=result.sha256,
-                size_bytes=result.size_bytes,
-                page_count=result.page_count,
-                text_layer_ok=int(result.text_layer_ok),
-                render_ok=int(result.render_ok),
-                extracted_text_hash=result.extracted_text_hash,
-                created_at=now,
-            )
-            session.add(export)
             version.status = VersionStatus.FINAL.value
             version.finalized_at = now
             draft.status = VersionStatus.FINAL.value
@@ -671,8 +797,7 @@ class SqlAlchemyMaterialGateway:
             try:
                 session.commit()
             except Exception:
-                pdf_path.unlink(missing_ok=True)
-                preview_path.unlink(missing_ok=True)
+                self._remove_written_exports(written)
                 raise
             return self._material_view(session, draft)
 
@@ -687,7 +812,14 @@ class SqlAlchemyMaterialGateway:
                 raise CareerDomainError(
                     "Export path is outside the controlled directory.", code="invalid_export_path"
                 )
-            return str(path), "image/png" if preview else "application/pdf"
+            if preview:
+                return str(path), "image/png"
+            media_type = (
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                if export.format == "docx"
+                else "application/pdf"
+            )
+            return str(path), media_type
 
     def _perform_review(
         self,
@@ -998,9 +1130,12 @@ class SqlAlchemyMaterialGateway:
                 select(ReviewFindingModel).where(ReviewFindingModel.review_id == review.id)
             ).all()
         )
-        export = session.scalar(
-            select(MaterialExportModel).where(MaterialExportModel.resume_version_id == current.id)
-        )
+        exports = session.scalars(
+            select(MaterialExportModel)
+            .where(MaterialExportModel.resume_version_id == current.id)
+            .order_by(MaterialExportModel.created_at.desc())
+        ).all()
+        export = next((item for item in exports if item.format == "pdf"), None)
         blocks = self._blocks(current)
         result.update(
             {
@@ -1027,6 +1162,7 @@ class SqlAlchemyMaterialGateway:
                     ],
                 },
                 "export": None if export is None else self._export_view(export),
+                "exports": [self._export_view(item) for item in exports],
             }
         )
         return result
@@ -1187,6 +1323,32 @@ class SqlAlchemyMaterialGateway:
             version = self._latest_resume_series_version(session, resume_id)
         return None if version is None else self._version_summary(version)
 
+    def _latest_docx_export_view(
+        self, session: Session, resume_id: str
+    ) -> dict[str, Any] | None:
+        version = session.scalar(
+            select(ResumeVersionModel)
+            .where(
+                ResumeVersionModel.resume_id == resume_id,
+                ResumeVersionModel.status == VersionStatus.FINAL.value,
+            )
+            .order_by(
+                ResumeVersionModel.finalized_at.desc(),
+                ResumeVersionModel.version_number.desc(),
+            )
+        )
+        if version is None:
+            return None
+        export = session.scalar(
+            select(MaterialExportModel)
+            .where(
+                MaterialExportModel.resume_version_id == version.id,
+                MaterialExportModel.format == "docx",
+            )
+            .order_by(MaterialExportModel.created_at.desc())
+        )
+        return None if export is None else self._export_view(export)
+
     def _resume_view(
         self, session: Session, resume: ResumeModel, version: ResumeVersionModel
     ) -> dict[str, Any]:
@@ -1196,12 +1358,23 @@ class SqlAlchemyMaterialGateway:
             )
         )
         default = session.scalar(select(ResumeDefaultModel))
+        docx_export = session.scalar(
+            select(MaterialExportModel)
+            .where(
+                MaterialExportModel.resume_version_id == version.id,
+                MaterialExportModel.format == "docx",
+            )
+            .order_by(MaterialExportModel.created_at.desc())
+        )
         return {
             "id": resume.id,
             "name": resume.name,
             "series_type": resume.series_type,
             "parent_resume_id": resume.parent_resume_id,
             "direction_label": resume.direction_label,
+            "scope": resume.scope,
+            "application_id": resume.application_id,
+            "source_file_name": resume.source_file_name,
             "material_count": material_count,
             "latest_version": self._version_summary(version),
             "latest_finalized_version": self._resume_series_version_summary(
@@ -1212,6 +1385,9 @@ class SqlAlchemyMaterialGateway:
                 default.version
                 if default is not None and default.resume_id == resume.id
                 else None
+            ),
+            "docx_export": (
+                None if docx_export is None else self._export_view(docx_export)
             ),
             "created_at": self._utc(resume.created_at),
             "updated_at": self._utc(resume.updated_at),
@@ -1259,11 +1435,12 @@ class SqlAlchemyMaterialGateway:
                 )
             ).all()
         )
-        export = session.scalar(
+        exports = session.scalars(
             select(MaterialExportModel)
             .where(MaterialExportModel.resume_version_id == current.id)
             .order_by(MaterialExportModel.created_at.desc())
-        )
+        ).all()
+        export = next((item for item in exports if item.format == "pdf"), None)
         result = self._resume_view(session, resume, current)
         result.update(
             {
@@ -1294,9 +1471,85 @@ class SqlAlchemyMaterialGateway:
                     }
                 ),
                 "export": None if export is None else self._export_view(export),
+                "exports": [self._export_view(item) for item in exports],
             }
         )
         return result
+
+    def _write_exports(
+        self,
+        session: Session,
+        *,
+        version: ResumeVersionModel,
+        title: str,
+        subtitle: str,
+        grouped: dict[str, list[str]],
+        file_stem: str,
+        now: datetime,
+    ) -> list[Path]:
+        sections = [
+            (_SECTION_LABELS.get(section, section), lines)
+            for section, lines in grouped.items()
+        ]
+        pdf = self._pdf_exporter.generate(
+            title=title, subtitle=subtitle, sections=sections
+        )
+        docx = self._docx_exporter.generate(
+            title=title, subtitle=subtitle, sections=sections
+        )
+        pdf_name = f"{file_stem}-{pdf.sha256[:12]}.pdf"
+        preview_name = f"{file_stem}-{pdf.sha256[:12]}.png"
+        docx_name = f"{file_stem}-{docx.sha256[:12]}.docx"
+        docx_preview_name = f"{file_stem}-{docx.sha256[:12]}.docx-preview"
+        pdf_path = self._exports_dir / pdf_name
+        preview_path = self._exports_dir / preview_name
+        docx_path = self._exports_dir / docx_name
+        written = [pdf_path, preview_path, docx_path]
+        try:
+            self._atomic_write(pdf_path, pdf.pdf_bytes)
+            self._atomic_write(preview_path, pdf.preview_png)
+            self._atomic_write(docx_path, docx.docx_bytes)
+        except Exception:
+            self._remove_written_exports(written)
+            raise
+        session.add_all(
+            [
+                MaterialExportModel(
+                    id=str(uuid4()),
+                    resume_version_id=version.id,
+                    format="pdf",
+                    relative_path=pdf_name,
+                    preview_relative_path=preview_name,
+                    sha256=pdf.sha256,
+                    size_bytes=pdf.size_bytes,
+                    page_count=pdf.page_count,
+                    text_layer_ok=int(pdf.text_layer_ok),
+                    render_ok=int(pdf.render_ok),
+                    extracted_text_hash=pdf.extracted_text_hash,
+                    created_at=now,
+                ),
+                MaterialExportModel(
+                    id=str(uuid4()),
+                    resume_version_id=version.id,
+                    format="docx",
+                    relative_path=docx_name,
+                    preview_relative_path=docx_preview_name,
+                    sha256=docx.sha256,
+                    size_bytes=docx.size_bytes,
+                    page_count=0,
+                    text_layer_ok=1,
+                    render_ok=1,
+                    extracted_text_hash=docx.extracted_text_hash,
+                    created_at=now,
+                ),
+            ]
+        )
+        return written
+
+    @staticmethod
+    def _remove_written_exports(paths: list[Path]) -> None:
+        for path in paths:
+            path.unlink(missing_ok=True)
 
     @staticmethod
     def _diff_blocks(session: Session, version: ResumeVersionModel) -> list[dict[str, Any]]:

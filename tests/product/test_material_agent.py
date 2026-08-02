@@ -16,7 +16,9 @@ from career_console.infrastructure.database.models import (
     FactReferenceModel,
     MaterialAgentProposalModel,
     MaterialDraftModel,
+    ResumeModel,
     ResumeVersionModel,
+    ReviewTaskModel,
 )
 from career_console.infrastructure.settings import CareerSettings
 from career_console.interfaces.http import create_app
@@ -160,6 +162,168 @@ def _select_direction(client: TestClient, job_id: str) -> None:
         "expected_version": proposal["version"], "resolution": "confirmed",
         "selected_direction_ids": ["backend"], "reason": "test"})
     assert response.status_code == 200, response.text
+
+
+def _generate_library_resume(client: TestClient) -> dict:
+    response = client.post(
+        "/api/v1/resumes/import",
+        data={"name": "通用后端简历"},
+        files={
+            "file": (
+                "resume.txt",
+                "Python 后端工程\n负责稳定交付".encode(),
+                "text/plain",
+            )
+        },
+    )
+    assert response.status_code == 201, response.text
+    return response.json()
+
+
+def _generate_application_resume(
+    client: TestClient,
+    *,
+    application: dict,
+    job: dict,
+    source_resume_version_id: str | None = None,
+) -> dict:
+    service = client.app.state.material_agent_service
+    service.drafter = _Drafter()
+    service.reviewer = _Reviewer()
+    response = client.post(
+        "/api/v1/materials/generate",
+        json={
+            "application_id": application["id"],
+            "job_post_id": job["id"],
+            "source_resume_version_id": source_resume_version_id,
+            "resume_name": "岗位专属简历",
+            "prompt": "突出与该岗位直接相关的后端经验。",
+        },
+    )
+    assert response.status_code == 201, response.text
+    return response.json()
+
+
+def test_direct_application_resume_generation_and_copy_to_library(
+    tmp_path: Path,
+) -> None:
+    with TestClient(create_app(_settings(tmp_path))) as client:
+        _complete_profile(client)
+        job = _job(client)
+        library = _generate_library_resume(client)
+        application = client.post(
+            "/api/v1/applications", json={"job_post_id": job["id"]}
+        ).json()
+
+        material = _generate_application_resume(
+            client,
+            application=application,
+            job=job,
+            source_resume_version_id=library["current_version"]["id"],
+        )
+        assert material["status"] == "final"
+        assert {item["format"] for item in material["exports"]} == {"pdf", "docx"}
+
+        refreshed = client.get(
+            f"/api/v1/applications/{application['id']}"
+        ).json()
+        assert refreshed["current_status"] == "preparing_materials"
+        assert refreshed["active_resume_binding"] is None
+        generated_version = material["current_version"]["id"]
+        available = next(
+            item
+            for item in refreshed["available_final_materials"]
+            if item["resume_version_id"] == generated_version
+        )
+        assert available["scope"] == "application"
+        assert available["application_id"] == application["id"]
+
+        application_resumes = client.get("/api/v1/resumes/application").json()
+        assert application_resumes["total"] == 1
+        application_resume = application_resumes["items"][0]
+        assert application_resume["scope"] == "application"
+        assert application_resume["application_id"] == application["id"]
+        assert application_resume["job_title"] == application["job_title"]
+        assert application_resume["company"] == application["company"]
+        assert application_resume["docx_export"]["format"] == "docx"
+
+        copied = client.post(
+            f"/api/v1/resumes/{application_resume['id']}/save-to-library",
+            json={"name": "保存后的岗位简历"},
+        )
+        assert copied.status_code == 201, copied.text
+        copied_resume = copied.json()
+        assert copied_resume["scope"] == "library"
+        assert copied_resume["application_id"] is None
+        assert copied_resume["id"] != application_resume["id"]
+        assert copied_resume["current_version"]["id"] != generated_version
+        assert copied_resume["docx_export"]["format"] == "docx"
+
+        with client.app.state.database.session_factory() as session:
+            assert session.scalar(
+                select(func.count()).select_from(MaterialAgentProposalModel)
+            ) == 0
+            assert session.scalar(
+                select(func.count()).select_from(ReviewTaskModel)
+            ) == 0
+
+
+def test_application_resume_can_bind_only_owning_application(
+    tmp_path: Path,
+) -> None:
+    with TestClient(create_app(_settings(tmp_path))) as client:
+        _complete_profile(client)
+        first_job = _job(client)
+        second_job = client.post(
+            "/api/v1/job-posts/import-text",
+            json={
+                "name": "JD2",
+                "text": "职位：平台工程师\n公司：另一家公司\n任职要求\n- 必须熟练 Python 和 SQL",
+            },
+        ).json()
+        first_application = client.post(
+            "/api/v1/applications", json={"job_post_id": first_job["id"]}
+        ).json()
+        second_application = client.post(
+            "/api/v1/applications", json={"job_post_id": second_job["id"]}
+        ).json()
+        material = _generate_application_resume(
+            client, application=first_application, job=first_job
+        )
+        version_id = material["current_version"]["id"]
+
+        bound = client.post(
+            f"/api/v1/applications/{first_application['id']}/resume-bindings",
+            json={
+                "expected_version": first_application["version"],
+                "command_id": "bind-own-application-resume",
+                "resume_version_id": version_id,
+                "use_default": False,
+                "source": "generated",
+            },
+        )
+        assert bound.status_code == 200, bound.text
+        assert bound.json()["current_status"] == "ready_to_apply"
+
+        cross_bound = client.post(
+            f"/api/v1/applications/{second_application['id']}/resume-bindings",
+            json={
+                "expected_version": second_application["version"],
+                "command_id": "bind-cross-application-resume",
+                "resume_version_id": version_id,
+                "use_default": False,
+                "source": "generated",
+            },
+        )
+        assert cross_bound.status_code == 422, cross_bound.text
+        assert cross_bound.json()["code"] == "application_resume_scope_mismatch"
+
+        with client.app.state.database.session_factory() as session:
+            resume = session.scalar(
+                select(ResumeModel).where(ResumeModel.scope == "application")
+            )
+            assert resume is not None
+            assert resume.application_id == first_application["id"]
 
 
 def test_material_agent_requires_active_direction(tmp_path: Path) -> None:

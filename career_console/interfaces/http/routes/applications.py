@@ -115,7 +115,7 @@ class ApplicationEventResponse(BaseModel):
 
 class ApplicationMaterialSnapshotResponse(BaseModel):
     id: str
-    material_draft_id: str
+    material_draft_id: str | None
     resume_version_id: str
     material_type: str
     title: str
@@ -135,6 +135,8 @@ class AvailableFinalMaterialResponse(BaseModel):
     name: str
     title: str
     material_type: str
+    scope: str
+    application_id: str | None
     finalized_at: datetime
 
 

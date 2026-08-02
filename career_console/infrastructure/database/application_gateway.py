@@ -179,7 +179,9 @@ class SqlAlchemyApplicationGateway:
             )
             if version is None:
                 raise EntityNotFoundError("Finalized resume version was not found.")
-            self._validate_bindable_version(session, version)
+            self._validate_bindable_version(
+                session, version, application_id=application.id
+            )
             current = session.scalar(
                 select(ApplicationResumeBindingModel).where(
                     ApplicationResumeBindingModel.application_id == application.id,
@@ -256,6 +258,11 @@ class SqlAlchemyApplicationGateway:
             resume = session.get(ResumeModel, resume_id)
             if resume is None:
                 raise EntityNotFoundError("Resume series was not found.")
+            if resume.scope != "library" or resume.retired_at is not None:
+                raise CareerDomainError(
+                    "Only an active library resume can be the default.",
+                    code="default_resume_library_required",
+                )
             self._latest_finalized_resume_version(session, resume.id)
             row = session.scalar(select(ResumeDefaultModel))
             if row is None:
@@ -314,7 +321,9 @@ class SqlAlchemyApplicationGateway:
                     code="application_resume_confirmation_mismatch",
                 )
             version = session.get(ResumeVersionModel, binding.resume_version_id)
-            self._validate_bindable_version(session, version)
+            self._validate_bindable_version(
+                session, version, application_id=application.id
+            )
             self._snapshot_resume_version(session, application, version, now)
             binding.status = "locked"
             binding.locked_at = now
@@ -626,15 +635,31 @@ class SqlAlchemyApplicationGateway:
         version: ResumeVersionModel,
         now: datetime,
     ) -> None:
-        draft = session.get(MaterialDraftModel, version.material_draft_id)
-        if draft is None:
-            raise CareerDomainError(
-                "The bound resume version has no traceable finalized material.",
-                code="application_resume_material_missing",
-            )
-        export = session.scalar(
-            select(MaterialExportModel).where(MaterialExportModel.resume_version_id == version.id)
+        draft = (
+            session.get(MaterialDraftModel, version.material_draft_id)
+            if version.material_draft_id is not None
+            else None
         )
+        export = session.scalar(
+            select(MaterialExportModel)
+            .where(
+                MaterialExportModel.resume_version_id == version.id,
+                MaterialExportModel.format == "docx",
+                MaterialExportModel.text_layer_ok == 1,
+                MaterialExportModel.render_ok == 1,
+            )
+            .order_by(MaterialExportModel.created_at.desc())
+        )
+        if export is None:
+            export = session.scalar(
+                select(MaterialExportModel)
+                .where(
+                    MaterialExportModel.resume_version_id == version.id,
+                    MaterialExportModel.text_layer_ok == 1,
+                    MaterialExportModel.render_ok == 1,
+                )
+                .order_by(MaterialExportModel.created_at.desc())
+            )
         if export is None:
             raise CareerDomainError(
                 "The bound resume version has no verified export.",
@@ -644,9 +669,9 @@ class SqlAlchemyApplicationGateway:
             ApplicationMaterialSnapshotModel(
                 id=str(uuid4()),
                 application_id=application.id,
-                material_draft_id=draft.id,
+                material_draft_id=draft.id if draft is not None else None,
                 resume_version_id=version.id,
-                material_type=draft.material_type,
+                material_type=draft.material_type if draft is not None else "resume",
                 title=version.title,
                 rendered_text=version.rendered_text,
                 content_hash=version.content_hash,
@@ -701,6 +726,14 @@ class SqlAlchemyApplicationGateway:
             application.current_status = target.value
             if target == ApplicationStatus.ARCHIVED:
                 application.archived_at = datetime.now(UTC)
+            if target in {
+                ApplicationStatus.OFFER,
+                ApplicationStatus.REJECTED,
+                ApplicationStatus.ARCHIVED,
+            }:
+                SqlAlchemyApplicationGateway._retire_application_resumes(
+                    session, application.id, datetime.now(UTC)
+                )
         return event
 
     @staticmethod
@@ -774,21 +807,36 @@ class SqlAlchemyApplicationGateway:
 
     @staticmethod
     def _validate_bindable_version(
-        session: Session, version: ResumeVersionModel | None
+        session: Session,
+        version: ResumeVersionModel | None,
+        *,
+        application_id: str | None = None,
     ) -> None:
         if version is None or version.status != "final" or version.finalized_at is None:
             raise CareerDomainError(
                 "Only a finalized resume version can be bound.",
                 code="application_resume_version_not_final",
             )
-        if version.material_draft_id is None:
+        resume = session.get(ResumeModel, version.resume_id)
+        if resume is None:
+            raise EntityNotFoundError("Resume series was not found.")
+        if resume.scope == "library" and resume.retired_at is not None:
             raise CareerDomainError(
-                "The finalized resume version must have traceable source material.",
-                code="application_resume_material_missing",
+                "Archived library resumes cannot be used for new bindings.",
+                code="application_resume_retired",
+            )
+        if resume.scope == "application" and (
+            application_id is None or resume.application_id != application_id
+        ):
+            raise CareerDomainError(
+                "A job resume can only be used by its owning application.",
+                code="application_resume_scope_mismatch",
             )
         export = session.scalar(
             select(MaterialExportModel.id).where(
-                MaterialExportModel.resume_version_id == version.id
+                MaterialExportModel.resume_version_id == version.id,
+                MaterialExportModel.text_layer_ok == 1,
+                MaterialExportModel.render_ok == 1,
             )
         )
         if export is None:
@@ -816,8 +864,33 @@ class SqlAlchemyApplicationGateway:
                 "The selected resume series has no finalized version.",
                 code="default_resume_finalized_version_required",
             )
+        resume = session.get(ResumeModel, resume_id)
+        if (
+            resume is None
+            or resume.scope != "library"
+            or resume.retired_at is not None
+        ):
+            raise CareerDomainError(
+                "The default resume must be an active library resume.",
+                code="default_resume_library_required",
+            )
         self._validate_bindable_version(session, version)
         return version
+
+    @staticmethod
+    def _retire_application_resumes(
+        session: Session, application_id: str, now: datetime
+    ) -> None:
+        rows = session.scalars(
+            select(ResumeModel).where(
+                ResumeModel.scope == "application",
+                ResumeModel.application_id == application_id,
+                ResumeModel.retired_at.is_(None),
+            )
+        ).all()
+        for resume in rows:
+            resume.retired_at = now
+            resume.updated_at = now
 
     def _default_resume_version(self, session: Session) -> ResumeVersionModel:
         row = session.scalar(select(ResumeDefaultModel))
@@ -844,11 +917,24 @@ class SqlAlchemyApplicationGateway:
             "series_type": resume.series_type,
             "parent_resume_id": resume.parent_resume_id,
             "direction_label": resume.direction_label,
+            "scope": resume.scope,
+            "application_id": resume.application_id,
+            "source_file_name": resume.source_file_name,
             "material_count": material_count,
             "latest_version": self._resume_version_summary(version),
             "latest_finalized_version": self._resume_version_summary(version),
             "is_default": True,
             "default_version": row.version,
+            "docx_export": self._export_view(
+                session.scalar(
+                    select(MaterialExportModel)
+                    .where(
+                        MaterialExportModel.resume_version_id == version.id,
+                        MaterialExportModel.format == "docx",
+                    )
+                    .order_by(MaterialExportModel.created_at.desc())
+                )
+            ),
             "created_at": self._utc(resume.created_at),
             "updated_at": self._utc(resume.updated_at),
         }
@@ -871,9 +957,23 @@ class SqlAlchemyApplicationGateway:
             .where(ApplicationEventProposalModel.application_id == application.id)
             .order_by(ApplicationEventProposalModel.created_at.desc())
         ).all()
-        available = session.scalars(
-            select(ResumeVersionModel)
-            .where(ResumeVersionModel.status == "final")
+        available = session.execute(
+            select(ResumeVersionModel, ResumeModel)
+            .join(ResumeModel, ResumeModel.id == ResumeVersionModel.resume_id)
+            .where(
+                ResumeVersionModel.status == "final",
+                (
+                    (
+                        (ResumeModel.scope == "library")
+                        & ResumeModel.retired_at.is_(None)
+                    )
+                    | (
+                        (ResumeModel.scope == "application")
+                        & (ResumeModel.application_id == application.id)
+                        & ResumeModel.retired_at.is_(None)
+                    )
+                ),
+            )
             .order_by(
                 ResumeVersionModel.finalized_at.desc(),
                 ResumeVersionModel.version_number.desc(),
@@ -906,19 +1006,22 @@ class SqlAlchemyApplicationGateway:
                 ),
                 "available_final_materials": [
                     {
-                        "id": item.material_draft_id,
+                        "id": item.material_draft_id or item.id,
                         "resume_id": item.resume_id,
                         "resume_version_id": item.id,
                         "version_number": item.version_number,
-                        "name": session.get(ResumeModel, item.resume_id).name,
+                        "name": resume.name,
                         "title": item.title,
-                        "material_type": session.get(
-                            MaterialDraftModel, item.material_draft_id
-                        ).material_type,
+                        "material_type": (
+                            session.get(MaterialDraftModel, item.material_draft_id).material_type
+                            if item.material_draft_id is not None
+                            else "resume"
+                        ),
+                        "scope": resume.scope,
+                        "application_id": resume.application_id,
                         "finalized_at": self._utc(item.finalized_at),
                     }
-                    for item in available
-                    if item.material_draft_id is not None
+                    for item, resume in available
                 ],
                 "mail_evidence": [self._mail_evidence_view(session, item) for item in mail_analyses],
             }
@@ -1092,6 +1195,24 @@ class SqlAlchemyApplicationGateway:
             "export_id": item.export_id,
             "export_sha256": item.export_sha256,
             "created_at": self._utc(item.created_at),
+        }
+
+    @staticmethod
+    def _export_view(item: MaterialExportModel | None) -> dict[str, Any] | None:
+        if item is None:
+            return None
+        return {
+            "id": item.id,
+            "format": item.format,
+            "sha256": item.sha256,
+            "size_bytes": item.size_bytes,
+            "page_count": item.page_count,
+            "text_layer_ok": bool(item.text_layer_ok),
+            "render_ok": bool(item.render_ok),
+            "extracted_text_hash": item.extracted_text_hash,
+            "created_at": SqlAlchemyApplicationGateway._utc(item.created_at),
+            "download_url": f"/api/v1/material-exports/{item.id}/download",
+            "preview_url": f"/api/v1/material-exports/{item.id}/preview",
         }
 
     @staticmethod

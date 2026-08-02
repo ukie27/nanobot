@@ -20,6 +20,7 @@ from career_console.domain.materials import (
     review_material,
 )
 from career_console.infrastructure.database.models import (
+    ApplicationModel,
     CandidateFactModel,
     CompanyModel,
     FactReferenceModel,
@@ -48,8 +49,9 @@ from career_console.infrastructure.database.review_runtime import (
 
 
 class SqlAlchemyMaterialAgentGateway:
-    def __init__(self, session_factory: sessionmaker[Session]) -> None:
+    def __init__(self, session_factory: sessionmaker[Session], publisher: Any) -> None:
         self._session_factory = session_factory
+        self._publisher = publisher
 
     def context(self, job_id: str, *, resume_id: str | None, resume_name: str) -> dict[str, Any]:
         with self._session_factory() as session:
@@ -114,6 +116,143 @@ class SqlAlchemyMaterialAgentGateway:
             ).order_by(MaterialAgentProposalModel.created_at.desc()))
             return self._view(session, row) if row else None
 
+    def application_context(
+        self,
+        application_id: str,
+        *,
+        job_id: str,
+        source_resume_version_id: str | None,
+        resume_name: str,
+        prompt: str,
+    ) -> dict[str, Any]:
+        normalized_name = resume_name.strip()
+        normalized_prompt = prompt.strip()
+        if not normalized_name:
+            raise CareerDomainError("请填写岗位简历名称。", code="empty_resume_name")
+        if not normalized_prompt:
+            raise CareerDomainError("请填写岗位简历生成要求。", code="empty_resume_prompt")
+        with self._session_factory() as session:
+            application = session.get(ApplicationModel, application_id)
+            if application is None:
+                raise LookupError("申请不存在。")
+            if application.job_post_id != job_id:
+                raise CareerDomainError(
+                    "申请与岗位不匹配。",
+                    code="application_job_mismatch",
+                )
+            if application.current_status not in {
+                "discovered",
+                "preparing_materials",
+                "ready_to_apply",
+            }:
+                raise CareerDomainError(
+                    "已投递或已结束的申请不能生成新的岗位简历。",
+                    code="application_resume_generation_locked",
+                )
+            if source_resume_version_id is not None:
+                source_version = session.get(
+                    ResumeVersionModel, source_resume_version_id
+                )
+                if (
+                    source_version is None
+                    or source_version.status != "final"
+                    or source_version.finalized_at is None
+                ):
+                    raise CareerDomainError(
+                        "请选择已定稿的简历库版本。",
+                        code="source_resume_version_not_final",
+                    )
+                source_resume = session.get(ResumeModel, source_version.resume_id)
+                if (
+                    source_resume is None
+                    or source_resume.scope != "library"
+                    or source_resume.retired_at is not None
+                ):
+                    raise CareerDomainError(
+                        "岗位定制只能使用有效的简历库版本作为来源。",
+                        code="source_resume_library_required",
+                    )
+            else:
+                source_version = None
+                source_resume = None
+
+            post = session.get(JobPostModel, job_id)
+            if post is None:
+                raise LookupError("岗位不存在。")
+            version = self._latest_job_version(session, job_id)
+            requirements = list(
+                session.scalars(
+                    select(JobRequirementModel)
+                    .where(JobRequirementModel.job_post_version_id == version.id)
+                    .order_by(JobRequirementModel.ordinal)
+                ).all()
+            )
+            facts = self._facts(session)
+            if not facts:
+                raise CareerDomainError(
+                    "个人档案至少需要一项可用事实。",
+                    code="profile_facts_required",
+                )
+            fact_hash = self._fact_hash(facts)
+            company = session.get(CompanyModel, post.company_id)
+            profile_facts = [
+                {
+                    "id": item.id,
+                    "version": item.version,
+                    "category": item.category,
+                    "fieldKey": item.field_key,
+                    "value": item.value,
+                }
+                for item in facts
+            ]
+            return {
+                "schemaVersion": "resume_draft_context.v2",
+                "businessTimezone": "Asia/Shanghai",
+                "inputRevision": (
+                    f"job:{version.id}:application:{application_id}:facts:{fact_hash}:"
+                    f"source:{source_version.id if source_version else 'none'}:"
+                    f"{source_version.content_hash if source_version else 'none'}:"
+                    f"prompt:{self._hash(normalized_prompt)}"
+                ),
+                "applicationId": application_id,
+                "job": {
+                    "id": post.id,
+                    "versionId": version.id,
+                    "title": post.title,
+                    "company": company.canonical_name if company else "",
+                    "location": post.location,
+                },
+                "activeDirectionSelection": None,
+                "requirements": [
+                    {
+                        "id": item.id,
+                        "category": item.category,
+                        "level": item.level,
+                        "description": item.description,
+                    }
+                    for item in requirements
+                ],
+                "profileFacts": profile_facts,
+                # Kept for existing Agent adapters during the profile terminology transition.
+                "confirmedFacts": profile_facts,
+                "factSetHash": fact_hash,
+                "resumeId": source_resume.id if source_resume else None,
+                "baseResumeVersion": (
+                    None
+                    if source_version is None
+                    else {
+                        "id": source_version.id,
+                        "versionNumber": source_version.version_number,
+                        "status": source_version.status,
+                        "title": source_version.title,
+                        "contentHash": source_version.content_hash,
+                        "blocks": json.loads(source_version.content_json),
+                    }
+                ),
+                "resumeName": normalized_name[:300],
+                "userPrompt": normalized_prompt[:4_000],
+            }
+
     def save(self, *, context: dict[str, Any], draft: ResumeDraftResult,
              review: MaterialReviewResult, input_hash: str, output_hash: str,
              draft_audit: dict[str, Any], review_audit: dict[str, Any]) -> dict[str, Any]:
@@ -150,6 +289,70 @@ class SqlAlchemyMaterialAgentGateway:
             )
             session.commit()
             return self._view(session, row)
+
+    def save_application_material(
+        self,
+        *,
+        context: dict[str, Any],
+        draft: ResumeDraftResult,
+        review: MaterialReviewResult,
+        input_hash: str,
+        output_hash: str,
+        draft_audit: dict[str, Any],
+        review_audit: dict[str, Any],
+    ) -> dict[str, Any]:
+        now = datetime.now(UTC)
+        with self._session_factory() as session:
+            draft_run = self._run(
+                session,
+                "resume_draft",
+                draft.schema_version,
+                "succeeded",
+                len(draft.blocks),
+                None,
+                context,
+                input_hash,
+                output_hash,
+                draft_audit,
+                now,
+            )
+            review_hash = self._hash(
+                review.model_dump(mode="json", by_alias=True)
+            )
+            review_run = self._run(
+                session,
+                "material_review",
+                review.schema_version,
+                "succeeded",
+                len(review.findings),
+                None,
+                context,
+                output_hash,
+                review_hash,
+                review_audit,
+                now,
+            )
+            resume, material = self._promote_application(
+                session, context=context, result=draft, now=now
+            )
+            session.commit()
+            resume_id = resume.id
+            material_id = material.id
+            draft_run_id = draft_run.id
+            review_run_id = review_run.id
+        try:
+            result = self._publisher.finalize_material(
+                material_id, expected_version=1
+            )
+        except Exception:
+            with self._session_factory() as cleanup:
+                resume = cleanup.get(ResumeModel, resume_id)
+                if resume is not None and resume.scope == "application":
+                    cleanup.delete(resume)
+                    cleanup.commit()
+            raise
+        result["agent_run_ids"] = [draft_run_id, review_run_id]
+        return result
 
     def save_failure(self, *, context: dict[str, Any], input_hash: str, stage: str,
                      error_code: str, draft: ResumeDraftResult | None,
@@ -220,7 +423,9 @@ class SqlAlchemyMaterialAgentGateway:
         if resume is None:
             resume = ResumeModel(
                 id=str(uuid4()), name=row.resume_name, series_type="base",
-                parent_resume_id=None, direction_label=None, created_at=now, updated_at=now,
+                parent_resume_id=None, direction_label=None, scope="library",
+                application_id=None, source_file_name=None, retired_at=None,
+                created_at=now, updated_at=now,
             )
             session.add(resume)
             session.flush()
@@ -279,6 +484,159 @@ class SqlAlchemyMaterialAgentGateway:
                                           severity=finding.severity, code=finding.code,
                                           message=finding.message, block_id=finding.block_id, created_at=now))
         return material
+
+    def _promote_application(
+        self,
+        session: Session,
+        *,
+        context: dict[str, Any],
+        result: ResumeDraftResult,
+        now: datetime,
+    ) -> tuple[ResumeModel, MaterialDraftModel]:
+        facts = self._facts(session)
+        domain_snapshots = [
+            FactSnapshot(item.id, item.id, item.version, item.value)
+            for item in facts
+        ]
+        domain_blocks = [
+            MaterialBlock(
+                item.block_id,
+                item.section,
+                item.text,
+                tuple(item.fact_ids),
+            )
+            for item in result.blocks
+        ]
+        deterministic = review_material(domain_blocks, domain_snapshots)
+        if any(item.severity == "error" for item in deterministic):
+            raise CareerDomainError(
+                "确定性事实审查未通过，不能生成正式材料。",
+                code="material_review_blocked",
+            )
+        post = session.get(JobPostModel, context["job"]["id"])
+        company = session.get(CompanyModel, post.company_id)
+        resume = ResumeModel(
+            id=str(uuid4()),
+            name=context["resumeName"][:300],
+            series_type="base",
+            parent_resume_id=None,
+            direction_label=None,
+            scope="application",
+            application_id=context["applicationId"],
+            source_file_name=None,
+            retired_at=None,
+            created_at=now,
+            updated_at=now,
+        )
+        session.add(resume)
+        session.flush()
+        material = MaterialDraftModel(
+            id=str(uuid4()),
+            resume_id=resume.id,
+            job_post_id=context["job"]["id"],
+            job_post_version_id=context["job"]["versionId"],
+            job_title_snapshot=post.title,
+            source_resume_version_id=(
+                (context["baseResumeVersion"] or {}).get("id")
+            ),
+            resume_direction_selection_id=None,
+            company_name_snapshot=company.canonical_name if company else "",
+            material_type="resume",
+            status="reviewed",
+            version=1,
+            strategy_stale=0,
+            strategy_stale_reason=None,
+            strategy_stale_at=None,
+            created_at=now,
+            updated_at=now,
+        )
+        session.add(material)
+        session.flush()
+        version = ResumeVersionModel(
+            id=str(uuid4()),
+            resume_id=resume.id,
+            material_draft_id=material.id,
+            parent_version_id=None,
+            source_resume_version_id=material.source_resume_version_id,
+            version_scope="job_tailored",
+            version_number=1,
+            status="reviewed",
+            title=result.title,
+            content_json="[]",
+            rendered_text="",
+            content_hash="",
+            fact_set_hash=context["factSetHash"],
+            created_at=now,
+            finalized_at=None,
+        )
+        session.add(version)
+        session.flush()
+        snapshot_ids: dict[str, str] = {}
+        for fact in facts:
+            snapshot = FactSnapshotModel(
+                id=str(uuid4()),
+                resume_version_id=version.id,
+                fact_id=fact.id,
+                fact_version=fact.version,
+                category=fact.category,
+                field_key=fact.field_key,
+                value=fact.value,
+                created_at=now,
+            )
+            session.add(snapshot)
+            snapshot_ids[fact.id] = snapshot.id
+        session.flush()
+        payload = []
+        for block in result.blocks:
+            ids = [snapshot_ids[fact_id] for fact_id in block.fact_ids]
+            payload.append(
+                {
+                    "id": block.block_id,
+                    "section": block.section,
+                    "text": block.text,
+                    "fact_snapshot_ids": ids,
+                }
+            )
+            for snapshot_id in ids:
+                session.add(
+                    FactReferenceModel(
+                        id=str(uuid4()),
+                        resume_version_id=version.id,
+                        fact_snapshot_id=snapshot_id,
+                        block_id=block.block_id,
+                    )
+                )
+        version.content_json = json.dumps(payload, ensure_ascii=False)
+        version.rendered_text = "\n".join(item.text for item in result.blocks)
+        version.content_hash = hashlib.sha256(
+            version.content_json.encode()
+        ).hexdigest()
+        formal_review = MaterialReviewModel(
+            id=str(uuid4()),
+            resume_version_id=version.id,
+            schema_version="material_review.v2",
+            status="passed",
+            error_count=0,
+            warning_count=sum(
+                item.severity == "warning" for item in deterministic
+            ),
+            created_at=now,
+        )
+        session.add(formal_review)
+        session.flush()
+        for finding in deterministic:
+            session.add(
+                ReviewFindingModel(
+                    id=str(uuid4()),
+                    review_id=formal_review.id,
+                    severity=finding.severity,
+                    code=finding.code,
+                    message=finding.message,
+                    block_id=finding.block_id,
+                    created_at=now,
+                )
+            )
+        return resume, material
 
     def _assert_current(self, session: Session, row: MaterialAgentProposalModel) -> None:
         selection = session.get(ResumeDirectionSelectionModel, row.resume_direction_selection_id)

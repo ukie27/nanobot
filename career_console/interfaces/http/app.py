@@ -108,7 +108,7 @@ from career_console.infrastructure.files import (
 from career_console.infrastructure.jd_discovery import SafeHtmlJobDescriptionDiscovery
 from career_console.infrastructure.jobs import BackgroundJobService
 from career_console.infrastructure.mail import StdlibReadOnlyImapClient
-from career_console.infrastructure.materials import VerifiedPdfExporter
+from career_console.infrastructure.materials import StructuredDocxExporter, VerifiedPdfExporter
 from career_console.infrastructure.scheduling import CareerSchedulerRuntime
 from career_console.infrastructure.secrets import KeyringSecretStore
 from career_console.infrastructure.settings import CareerSettings
@@ -211,16 +211,17 @@ def create_app(
             database.session_factory,
             exports_dir=settings.exports_dir,
             pdf_exporter=VerifiedPdfExporter(),
+            docx_exporter=StructuredDocxExporter(),
         )
         material_drafter, material_reviewer, standalone_resume_drafter = _create_material_agents(
             settings, agent_runtime
         )
         material_agent_service = MaterialAgentApplicationService(
-            SqlAlchemyMaterialAgentGateway(database.session_factory),
+            SqlAlchemyMaterialAgentGateway(database.session_factory, material_gateway),
             material_drafter, material_reviewer,
         )
         standalone_resume_service = StandaloneResumeApplicationService(
-            SqlAlchemyStandaloneResumeGateway(database.session_factory),
+            SqlAlchemyStandaloneResumeGateway(database.session_factory, material_gateway),
             standalone_resume_drafter,
         )
         application_gateway = SqlAlchemyApplicationGateway(database.session_factory)
